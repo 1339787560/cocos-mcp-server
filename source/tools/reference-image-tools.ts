@@ -1,4 +1,5 @@
 import { ToolDefinition, ToolResponse, ToolExecutor } from '../types';
+import { isVersionAtLeast, getCocosVersion } from '../utils/compat';
 
 export class ReferenceImageTools implements ToolExecutor {
     getTools(): ToolDefinition[] {
@@ -168,6 +169,14 @@ export class ReferenceImageTools implements ToolExecutor {
     }
 
     async execute(toolName: string, args: any): Promise<ToolResponse> {
+        // 参考图功能需要 3.8.2+ 版本
+        if (!isVersionAtLeast('3.8.2')) {
+            return {
+                success: false,
+                error: `参考图功能需要 Cocos Creator 3.8.2 或更高版本，当前版本: ${getCocosVersion()}。请升级 Cocos Creator 以使用此功能。`
+            };
+        }
+
         switch (toolName) {
             case 'add_reference_image':
                 return await this.addReferenceImage(args.paths);

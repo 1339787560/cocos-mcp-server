@@ -1,4 +1,5 @@
 import { ToolDefinition, ToolResponse, ToolExecutor, SceneInfo } from '../types';
+import { queryNodeTreeWithFallback } from '../utils/compat';
 
 export class SceneTools implements ToolExecutor {
     getTools(): ToolDefinition[] {
@@ -122,38 +123,38 @@ export class SceneTools implements ToolExecutor {
     }
 
     private async getCurrentScene(): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // 直接使用 query-node-tree 来获取场景信息（这个方法已经验证可用）
-            Editor.Message.request('scene', 'query-node-tree').then((tree: any) => {
-                if (tree && tree.uuid) {
-                    resolve({
-                        success: true,
-                        data: {
-                            name: tree.name || 'Current Scene',
-                            uuid: tree.uuid,
-                            type: tree.type || 'cc.Scene',
-                            active: tree.active !== undefined ? tree.active : true,
-                            nodeCount: tree.children ? tree.children.length : 0
-                        }
-                    });
-                } else {
-                    resolve({ success: false, error: 'No scene data available' });
-                }
-            }).catch((err: Error) => {
-                // 备用方案：使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'getCurrentSceneInfo',
-                    args: []
+        try {
+            // 使用兼容层查询节点树（自动回退到 execute-scene-script）
+            const tree = await queryNodeTreeWithFallback();
+            if (tree && tree.uuid) {
+                return {
+                    success: true,
+                    data: {
+                        name: tree.name || 'Current Scene',
+                        uuid: tree.uuid,
+                        type: tree.type || 'cc.Scene',
+                        active: tree.active !== undefined ? tree.active : true,
+                        nodeCount: tree.children ? tree.children.length : 0
+                    }
                 };
-                
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    resolve(result);
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
-            });
-        });
+            } else {
+                return { success: false, error: 'No scene data available' };
+            }
+        } catch (err: any) {
+            // 备用方案：使用场景脚本
+            const options = {
+                name: 'cocos-mcp-server',
+                method: 'getCurrentSceneInfo',
+                args: []
+            };
+
+            try {
+                const result = await Editor.Message.request('scene', 'execute-scene-script', options);
+                return result;
+            } catch (err2: any) {
+                return { success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` };
+            }
+        }
     }
 
     private async getSceneList(): Promise<ToolResponse> {
@@ -396,33 +397,33 @@ export class SceneTools implements ToolExecutor {
     }
 
     private async getSceneHierarchy(includeComponents: boolean = false): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // 优先尝试使用 Editor API 查询场景节点树
-            Editor.Message.request('scene', 'query-node-tree').then((tree: any) => {
-                if (tree) {
-                    const hierarchy = this.buildHierarchy(tree, includeComponents);
-                    resolve({
-                        success: true,
-                        data: hierarchy
-                    });
-                } else {
-                    resolve({ success: false, error: 'No scene hierarchy available' });
-                }
-            }).catch((err: Error) => {
-                // 备用方案：使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'getSceneHierarchy',
-                    args: [includeComponents]
+        try {
+            // 使用兼容层查询节点树（自动回退到 execute-scene-script）
+            const tree = await queryNodeTreeWithFallback();
+            if (tree) {
+                const hierarchy = this.buildHierarchy(tree, includeComponents);
+                return {
+                    success: true,
+                    data: hierarchy
                 };
-                
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    resolve(result);
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
-            });
-        });
+            } else {
+                return { success: false, error: 'No scene hierarchy available' };
+            }
+        } catch (err: any) {
+            // 备用方案：使用场景脚本
+            const options = {
+                name: 'cocos-mcp-server',
+                method: 'getSceneHierarchy',
+                args: [includeComponents]
+            };
+
+            try {
+                const result = await Editor.Message.request('scene', 'execute-scene-script', options);
+                return result;
+            } catch (err2: any) {
+                return { success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` };
+            }
+        }
     }
 
     private buildHierarchy(node: any, includeComponents: boolean): any {

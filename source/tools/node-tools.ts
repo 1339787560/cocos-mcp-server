@@ -1,5 +1,6 @@
 import { ToolDefinition, ToolResponse, ToolExecutor, NodeInfo } from '../types';
 import { ComponentTools } from './component-tools';
+import { queryNodeWithFallback, queryNodeTreeWithFallback, setPropertyWithFallback, safeMessageRequest } from '../utils/compat';
 
 export class NodeTools implements ToolExecutor {
     private componentTools = new ComponentTools();
@@ -314,7 +315,7 @@ export class NodeTools implements ToolExecutor {
                 // 如果没有提供父节点UUID，获取场景根节点
                 if (!targetParentUuid) {
                     try {
-                        const sceneInfo = await Editor.Message.request('scene', 'query-node-tree');
+                        const sceneInfo = await queryNodeTreeWithFallback();
                         if (sceneInfo && typeof sceneInfo === 'object' && !Array.isArray(sceneInfo) && Object.prototype.hasOwnProperty.call(sceneInfo, 'uuid')) {
                             targetParentUuid = (sceneInfo as any).uuid;
                             console.log(`No parent specified, using scene root: ${targetParentUuid}`);
@@ -322,7 +323,7 @@ export class NodeTools implements ToolExecutor {
                             targetParentUuid = sceneInfo[0].uuid;
                             console.log(`No parent specified, using scene root: ${targetParentUuid}`);
                         } else {
-                            const currentScene = await Editor.Message.request('scene', 'query-current-scene');
+                            const currentScene = await safeMessageRequest('scene', 'query-current-scene');
                             if (currentScene && currentScene.uuid) {
                                 targetParentUuid = currentScene.uuid;
                             }
@@ -498,121 +499,120 @@ export class NodeTools implements ToolExecutor {
     }
 
     private async getNodeInfo(uuid: string): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            Editor.Message.request('scene', 'query-node', uuid).then((nodeData: any) => {
-                if (!nodeData) {
-                    resolve({
-                        success: false,
-                        error: 'Node not found or invalid response'
-                    });
-                    return;
-                }
-                
-                // 根据实际返回的数据结构解析节点信息
-                const info: NodeInfo = {
-                    uuid: nodeData.uuid?.value || uuid,
-                    name: nodeData.name?.value || 'Unknown',
-                    active: nodeData.active?.value !== undefined ? nodeData.active.value : true,
-                    position: nodeData.position?.value || { x: 0, y: 0, z: 0 },
-                    rotation: nodeData.rotation?.value || { x: 0, y: 0, z: 0 },
-                    scale: nodeData.scale?.value || { x: 1, y: 1, z: 1 },
-                    parent: nodeData.parent?.value?.uuid || null,
-                    children: nodeData.children || [],
-                    components: (nodeData.__comps__ || []).map((comp: any) => ({
-                        type: comp.__type__ || 'Unknown',
-                        enabled: comp.enabled !== undefined ? comp.enabled : true
-                    })),
-                    layer: nodeData.layer?.value || 1073741824,
-                    mobility: nodeData.mobility?.value || 0
+        try {
+            // 使用兼容层查询节点（自动回退到 execute-scene-script）
+            const nodeData = await queryNodeWithFallback(uuid);
+            if (!nodeData) {
+                return {
+                    success: false,
+                    error: 'Node not found or invalid response'
                 };
-                resolve({ success: true, data: info });
-            }).catch((err: Error) => {
-                resolve({ success: false, error: err.message });
-            });
-        });
+            }
+
+            // 根据实际返回的数据结构解析节点信息
+            const info: NodeInfo = {
+                uuid: nodeData.uuid?.value || uuid,
+                name: nodeData.name?.value || 'Unknown',
+                active: nodeData.active?.value !== undefined ? nodeData.active.value : true,
+                position: nodeData.position?.value || { x: 0, y: 0, z: 0 },
+                rotation: nodeData.rotation?.value || { x: 0, y: 0, z: 0 },
+                scale: nodeData.scale?.value || { x: 1, y: 1, z: 1 },
+                parent: nodeData.parent?.value?.uuid || null,
+                children: nodeData.children || [],
+                components: (nodeData.__comps__ || []).map((comp: any) => ({
+                    type: comp.__type__ || 'Unknown',
+                    enabled: comp.enabled !== undefined ? comp.enabled : true
+                })),
+                layer: nodeData.layer?.value || 1073741824,
+                mobility: nodeData.mobility?.value || 0
+            };
+            return { success: true, data: info };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
     }
 
     private async findNodes(pattern: string, exactMatch: boolean = false): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // Note: 'query-nodes-by-name' API doesn't exist in official documentation
-            // Using tree traversal as primary approach
-            Editor.Message.request('scene', 'query-node-tree').then((tree: any) => {
-                const nodes: any[] = [];
-                
-                const searchTree = (node: any, currentPath: string = '') => {
-                    const nodePath = currentPath ? `${currentPath}/${node.name}` : node.name;
-                    
-                    const matches = exactMatch ? 
-                        node.name === pattern : 
-                        node.name.toLowerCase().includes(pattern.toLowerCase());
-                    
-                    if (matches) {
-                        nodes.push({
-                            uuid: node.uuid,
-                            name: node.name,
-                            path: nodePath
-                        });
-                    }
-                    
-                    if (node.children) {
-                        for (const child of node.children) {
-                            searchTree(child, nodePath);
-                        }
-                    }
-                };
-                
-                if (tree) {
-                    searchTree(tree);
+        try {
+            // 使用兼容层查询节点树（自动回退到 execute-scene-script）
+            const tree = await queryNodeTreeWithFallback();
+            const nodes: any[] = [];
+
+            const searchTree = (node: any, currentPath: string = '') => {
+                const nodePath = currentPath ? `${currentPath}/${node.name}` : node.name;
+
+                const matches = exactMatch ?
+                    node.name === pattern :
+                    node.name.toLowerCase().includes(pattern.toLowerCase());
+
+                if (matches) {
+                    nodes.push({
+                        uuid: node.uuid,
+                        name: node.name,
+                        path: nodePath
+                    });
                 }
-                
-                resolve({ success: true, data: nodes });
-            }).catch((err: Error) => {
-                // 备用方案：使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'findNodes',
-                    args: [pattern, exactMatch]
-                };
-                
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    resolve(result);
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Tree search failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
-            });
-        });
+
+                if (node.children) {
+                    for (const child of node.children) {
+                        searchTree(child, nodePath);
+                    }
+                }
+            };
+
+            if (tree) {
+                searchTree(tree);
+            }
+
+            return { success: true, data: nodes };
+        } catch (err: any) {
+            // 备用方案：使用场景脚本
+            const options = {
+                name: 'cocos-mcp-server',
+                method: 'findNodes',
+                args: [pattern, exactMatch]
+            };
+
+            try {
+                const result = await Editor.Message.request('scene', 'execute-scene-script', options);
+                return result;
+            } catch (err2: any) {
+                return { success: false, error: `Tree search failed: ${err.message}, Scene script failed: ${err2.message}` };
+            }
+        }
     }
 
     private async findNodeByName(name: string): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // 优先尝试使用 Editor API 查询节点树并搜索
-            Editor.Message.request('scene', 'query-node-tree').then((tree: any) => {
-                const foundNode = this.searchNodeInTree(tree, name);
-                if (foundNode) {
-                    resolve({
-                        success: true,
-                        data: {
-                            uuid: foundNode.uuid,
-                            name: foundNode.name,
-                            path: this.getNodePath(foundNode)
-                        }
-                    });
-                } else {
-                    resolve({ success: false, error: `Node '${name}' not found` });
-                }
-            }).catch((err: Error) => {
-                // 备用方案：使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'findNodeByName',
-                    args: [name]
+        try {
+            // 使用兼容层查询节点树（自动回退到 execute-scene-script）
+            const tree = await queryNodeTreeWithFallback();
+            const foundNode = this.searchNodeInTree(tree, name);
+            if (foundNode) {
+                return {
+                    success: true,
+                    data: {
+                        uuid: foundNode.uuid,
+                        name: foundNode.name,
+                        path: this.getNodePath(foundNode)
+                    }
                 };
-                
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    resolve(result);
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
+            } else {
+                return { success: false, error: `Node '${name}' not found` };
+            }
+        } catch (err: any) {
+            // 备用方案：使用场景脚本
+            const options = {
+                name: 'cocos-mcp-server',
+                method: 'findNodeByName',
+                args: [name]
+            };
+
+            try {
+                const result = await Editor.Message.request('scene', 'execute-scene-script', options);
+                return result;
+            } catch (err2: any) {
+                return { success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` };
+            }
             });
         });
     }
@@ -635,53 +635,53 @@ export class NodeTools implements ToolExecutor {
     }
 
     private async getAllNodes(): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // 尝试查询场景节点树
-            Editor.Message.request('scene', 'query-node-tree').then((tree: any) => {
-                const nodes: any[] = [];
-                
-                const traverseTree = (node: any) => {
-                    nodes.push({
-                        uuid: node.uuid,
-                        name: node.name,
-                        type: node.type,
-                        active: node.active,
-                        path: this.getNodePath(node)
-                    });
-                    
-                    if (node.children) {
-                        for (const child of node.children) {
-                            traverseTree(child);
-                        }
+        try {
+            // 使用兼容层查询节点树（自动回退到 execute-scene-script）
+            const tree = await queryNodeTreeWithFallback();
+            const nodes: any[] = [];
+
+            const traverseTree = (node: any) => {
+                nodes.push({
+                    uuid: node.uuid,
+                    name: node.name,
+                    type: node.type,
+                    active: node.active,
+                    path: this.getNodePath(node)
+                });
+
+                if (node.children) {
+                    for (const child of node.children) {
+                        traverseTree(child);
                     }
-                };
-                
-                if (tree && tree.children) {
-                    traverseTree(tree);
                 }
-                
-                resolve({
-                    success: true,
-                    data: {
-                        totalNodes: nodes.length,
-                        nodes: nodes
-                    }
-                });
-            }).catch((err: Error) => {
-                // 备用方案：使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'getAllNodes',
-                    args: []
-                };
-                
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    resolve(result);
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
-            });
-        });
+            };
+
+            if (tree && tree.children) {
+                traverseTree(tree);
+            }
+
+            return {
+                success: true,
+                data: {
+                    totalNodes: nodes.length,
+                    nodes: nodes
+                }
+            };
+        } catch (err: any) {
+            // 备用方案：使用场景脚本
+            const options = {
+                name: 'cocos-mcp-server',
+                method: 'getAllNodes',
+                args: []
+            };
+
+            try {
+                const result = await Editor.Message.request('scene', 'execute-scene-script', options);
+                return result;
+            } catch (err2: any) {
+                return { success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` };
+            }
+        }
     }
 
     private getNodePath(node: any): string {
@@ -695,55 +695,51 @@ export class NodeTools implements ToolExecutor {
     }
 
     private async setNodeProperty(uuid: string, property: string, value: any): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // 尝试直接使用 Editor API 设置节点属性
-            Editor.Message.request('scene', 'set-property', {
-                uuid: uuid,
-                path: property,
-                dump: {
-                    value: value
-                }
-            }).then(() => {
-                // Get comprehensive verification data including updated node info
-                this.getNodeInfo(uuid).then((nodeInfo) => {
-                    resolve({
-                        success: true,
-                        message: `Property '${property}' updated successfully`,
-                        data: {
-                            nodeUuid: uuid,
+        try {
+            // 使用兼容层设置节点属性（自动回退到 execute-scene-script）
+            await setPropertyWithFallback(uuid, property, { value: value });
+
+            // Get comprehensive verification data including updated node info
+            try {
+                const nodeInfo = await this.getNodeInfo(uuid);
+                return {
+                    success: true,
+                    message: `Property '${property}' updated successfully`,
+                    data: {
+                        nodeUuid: uuid,
+                        property: property,
+                        newValue: value
+                    },
+                    verificationData: {
+                        nodeInfo: nodeInfo.data,
+                        changeDetails: {
                             property: property,
-                            newValue: value
-                        },
-                        verificationData: {
-                            nodeInfo: nodeInfo.data,
-                            changeDetails: {
-                                property: property,
-                                value: value,
-                                timestamp: new Date().toISOString()
-                            }
+                            value: value,
+                            timestamp: new Date().toISOString()
                         }
-                    });
-                }).catch(() => {
-                    resolve({
-                        success: true,
-                        message: `Property '${property}' updated successfully (verification failed)`
-                    });
-                });
-            }).catch((err: Error) => {
-                // 如果直接设置失败，尝试使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'setNodeProperty',
-                    args: [uuid, property, value]
+                    }
                 };
-                
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    resolve(result);
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
-            });
-        });
+            } catch {
+                return {
+                    success: true,
+                    message: `Property '${property}' updated successfully (verification failed)`
+                };
+            }
+        } catch (err: any) {
+            // 如果直接设置失败，尝试使用场景脚本
+            const options = {
+                name: 'cocos-mcp-server',
+                method: 'setNodeProperty',
+                args: [uuid, property, value]
+            };
+
+            try {
+                const result = await Editor.Message.request('scene', 'execute-scene-script', options);
+                return result;
+            } catch (err2: any) {
+                return { success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` };
+            }
+        }
     }
 
     private async setNodeTransform(args: any): Promise<ToolResponse> {
@@ -769,45 +765,33 @@ export class NodeTools implements ToolExecutor {
                     if (normalizedPosition.warning) {
                         warnings.push(normalizedPosition.warning);
                     }
-                    
+
                     updatePromises.push(
-                        Editor.Message.request('scene', 'set-property', {
-                            uuid: uuid,
-                            path: 'position',
-                            dump: { value: normalizedPosition.value }
-                        })
+                        setPropertyWithFallback(uuid, 'position', { value: normalizedPosition.value })
                     );
                     updates.push('position');
                 }
-                
+
                 if (rotation) {
                     const normalizedRotation = this.normalizeTransformValue(rotation, 'rotation', is2DNode);
                     if (normalizedRotation.warning) {
                         warnings.push(normalizedRotation.warning);
                     }
-                    
+
                     updatePromises.push(
-                        Editor.Message.request('scene', 'set-property', {
-                            uuid: uuid,
-                            path: 'rotation',
-                            dump: { value: normalizedRotation.value }
-                        })
+                        setPropertyWithFallback(uuid, 'rotation', { value: normalizedRotation.value })
                     );
                     updates.push('rotation');
                 }
-                
+
                 if (scale) {
                     const normalizedScale = this.normalizeTransformValue(scale, 'scale', is2DNode);
                     if (normalizedScale.warning) {
                         warnings.push(normalizedScale.warning);
                     }
-                    
+
                     updatePromises.push(
-                        Editor.Message.request('scene', 'set-property', {
-                            uuid: uuid,
-                            path: 'scale',
-                            dump: { value: normalizedScale.value }
-                        })
+                        setPropertyWithFallback(uuid, 'scale', { value: normalizedScale.value })
                     );
                     updates.push('scale');
                 }

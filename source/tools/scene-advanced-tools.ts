@@ -1,4 +1,5 @@
 import { ToolDefinition, ToolResponse, ToolExecutor } from '../types';
+import { isVersionAtLeast, getCocosVersion } from '../utils/compat';
 
 export class SceneAdvancedTools implements ToolExecutor {
     getTools(): ToolDefinition[] {
@@ -356,6 +357,21 @@ export class SceneAdvancedTools implements ToolExecutor {
     }
 
     async execute(toolName: string, args: any): Promise<ToolResponse> {
+        // 检查版本兼容性 - 高级场景操作需要 3.8.6+
+        const advancedTools = [
+            'reset_node_property', 'move_array_element', 'remove_array_element',
+            'restore_prefab', 'execute_component_method',
+            'query_scene_classes', 'query_scene_components',
+            'query_component_has_script', 'query_nodes_by_asset_uuid'
+        ];
+
+        if (advancedTools.includes(toolName) && !isVersionAtLeast('3.8.6')) {
+            return {
+                success: false,
+                error: `工具 '${toolName}' 需要 Cocos Creator 3.8.6 或更高版本，当前版本: ${getCocosVersion()}。请升级 Cocos Creator 以使用此功能。`
+            };
+        }
+
         switch (toolName) {
             case 'reset_node_property':
                 return await this.resetNodeProperty(args.uuid, args.path);

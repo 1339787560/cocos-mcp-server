@@ -30,7 +30,7 @@ Cocos store: https://store.cocos.com/app/detail/7941
 - **Event Binding and Legacy Function Completion**: Added and implemented event binding, node/component/asset legacy functions, all methods completely aligned with official implementation.
 - **Interface Optimization**: All interface parameters are clearer, documentation is more complete, AI can understand and call more easily.
 - **Plugin Panel Optimization**: Panel UI is more concise, operations are more intuitive.
-- **Performance and Compatibility Improvements**: Overall architecture is more efficient, compatible with Cocos Creator 3.8.6 and all versions above.
+- **Performance and Compatibility Improvements**: Overall architecture is more efficient, compatible with Cocos Creator 3.8.0 and all versions above.
 
 
 ## Tool System and Operation Codes
@@ -414,9 +414,16 @@ Enable debug logging in the plugin panel for detailed operation logs.
 
 ## Requirements
 
-- Cocos Creator 3.8.6 or later
+- Cocos Creator 3.8.0 or later
 - Node.js (bundled with Cocos Creator)
 - TypeScript (installed as dev dependency)
+
+## Compatibility Notes
+
+- **3.8.0 - 3.8.5**: Core features fully supported (scenes, nodes, components, assets, project management, etc.)
+- **3.8.6+**: Full feature support, including advanced scene operations and reference image features
+- Some advanced features (like reset properties, array element operations, component method execution, etc.) require 3.8.6+
+- Reference image feature requires 3.8.2+
 
 ## License
 

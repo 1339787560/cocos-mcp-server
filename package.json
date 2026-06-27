@@ -4,7 +4,7 @@
     "name": "cocos-mcp-server",
     "version": "1.4.0",
     "author": "LiDaxian",
-    "editor": ">=3.8.6",
+    "editor": ">=3.8.0",
     "scripts": {
         "preinstall": "node ./scripts/preinstall.js",
         "build": "tsc",

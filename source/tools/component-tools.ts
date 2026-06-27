@@ -1,4 +1,5 @@
 import { ToolDefinition, ToolResponse, ToolExecutor, ComponentInfo } from '../types';
+import { createComponentWithFallback, removeComponentWithFallback, queryNodeWithFallback, queryNodeTreeWithFallback, setPropertyWithFallback, safeMessageRequest } from '../utils/compat';
 
 export class ComponentTools implements ToolExecutor {
     getTools(): ToolDefinition[] {
@@ -223,11 +224,9 @@ export class ComponentTools implements ToolExecutor {
                     return;
                 }
             }
-            // 尝试直接使用 Editor API 添加组件
-            Editor.Message.request('scene', 'create-component', {
-                uuid: nodeUuid,
-                component: componentType
-            }).then(async (result: any) => {
+            // 使用兼容层添加组件（自动回退到 execute-scene-script）
+            try {
+                const result = await createComponentWithFallback(nodeUuid, componentType);
                 // 等待一段时间让Editor完成组件添加
                 await new Promise(resolve => setTimeout(resolve, 100));
                 // 重新查询节点信息验证组件是否真的添加成功
@@ -264,19 +263,9 @@ export class ComponentTools implements ToolExecutor {
                         error: `Failed to verify component addition: ${verifyError.message}`
                     });
                 }
-            }).catch((err: Error) => {
-                // 备用方案：使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'addComponentToNode',
-                    args: [nodeUuid, componentType]
-                };
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    resolve(result);
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
-            });
+            } catch (err: any) {
+                resolve({ success: false, error: `Failed to add component: ${err.message}` });
+            }
         });
     }
 
@@ -294,12 +283,9 @@ export class ComponentTools implements ToolExecutor {
                 resolve({ success: false, error: `Component cid '${componentType}' not found on node '${nodeUuid}'. 请用getComponents获取type字段（cid）作为componentType。` });
                 return;
             }
-            // 3. 官方API直接移除
+            // 3. 使用兼容层移除组件（自动回退到 execute-scene-script）
             try {
-                await Editor.Message.request('scene', 'remove-component', {
-                    uuid: nodeUuid,
-                    component: componentType
-                });
+                await removeComponentWithFallback(nodeUuid, componentType);
                 // 4. 再查一次确认是否移除
                 const afterRemoveInfo = await this.getComponents(nodeUuid);
                 const stillExists = afterRemoveInfo.success && afterRemoveInfo.data?.components?.some((comp: any) => comp.type === componentType);
@@ -319,108 +305,108 @@ export class ComponentTools implements ToolExecutor {
     }
 
     private async getComponents(nodeUuid: string): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // 优先尝试直接使用 Editor API 查询节点信息
-            Editor.Message.request('scene', 'query-node', nodeUuid).then((nodeData: any) => {
-                if (nodeData && nodeData.__comps__) {
-                    const components = nodeData.__comps__.map((comp: any) => ({
-                        type: comp.__type__ || comp.cid || comp.type || 'Unknown',
-                        uuid: comp.uuid?.value || comp.uuid || null,
-                        enabled: comp.enabled !== undefined ? comp.enabled : true,
-                        properties: this.extractComponentProperties(comp)
-                    }));
-                    
-                    resolve({
-                        success: true,
-                        data: {
-                            nodeUuid: nodeUuid,
-                            components: components
-                        }
-                    });
-                } else {
-                    resolve({ success: false, error: 'Node not found or no components data' });
-                }
-            }).catch((err: Error) => {
-                // 备用方案：使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'getNodeInfo',
-                    args: [nodeUuid]
-                };
-                
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    if (result.success) {
-                        resolve({
-                            success: true,
-                            data: result.data.components
-                        });
-                    } else {
-                        resolve(result);
+        // 使用兼容层查询节点（自动回退到 execute-scene-script）
+        try {
+            const nodeData = await queryNodeWithFallback(nodeUuid);
+            if (nodeData && nodeData.__comps__) {
+                const components = nodeData.__comps__.map((comp: any) => ({
+                    type: comp.__type__ || comp.cid || comp.type || 'Unknown',
+                    uuid: comp.uuid?.value || comp.uuid || null,
+                    enabled: comp.enabled !== undefined ? comp.enabled : true,
+                    properties: this.extractComponentProperties(comp)
+                }));
+
+                return {
+                    success: true,
+                    data: {
+                        nodeUuid: nodeUuid,
+                        components: components
                     }
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
-            });
-        });
+                };
+            } else {
+                return { success: false, error: 'Node not found or no components data' };
+            }
+        } catch (err: any) {
+            // 备用方案：使用场景脚本
+            const options = {
+                name: 'cocos-mcp-server',
+                method: 'getNodeInfo',
+                args: [nodeUuid]
+            };
+
+            try {
+                const result = await Editor.Message.request('scene', 'execute-scene-script', options);
+                if (result.success) {
+                    return {
+                        success: true,
+                        data: result.data.components
+                    };
+                } else {
+                    return result;
+                }
+            } catch (err2: any) {
+                return { success: false, error: `Query failed: ${err.message}, Scene script failed: ${err2.message}` };
+            }
+        }
     }
 
     private async getComponentInfo(nodeUuid: string, componentType: string): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // 优先尝试直接使用 Editor API 查询节点信息
-            Editor.Message.request('scene', 'query-node', nodeUuid).then((nodeData: any) => {
-                if (nodeData && nodeData.__comps__) {
-                    const component = nodeData.__comps__.find((comp: any) => {
-                        const compType = comp.__type__ || comp.cid || comp.type;
-                        return compType === componentType;
-                    });
-                    
+        // 使用兼容层查询节点（自动回退到 execute-scene-script）
+        try {
+            const nodeData = await queryNodeWithFallback(nodeUuid);
+            if (nodeData && nodeData.__comps__) {
+                const component = nodeData.__comps__.find((comp: any) => {
+                    const compType = comp.__type__ || comp.cid || comp.type;
+                    return compType === componentType;
+                });
+
+                if (component) {
+                    return {
+                        success: true,
+                        data: {
+                            nodeUuid: nodeUuid,
+                            componentType: componentType,
+                            enabled: component.enabled !== undefined ? component.enabled : true,
+                            properties: this.extractComponentProperties(component)
+                        }
+                    };
+                } else {
+                    return { success: false, error: `Component '${componentType}' not found on node` };
+                }
+            } else {
+                return { success: false, error: 'Node not found or no components data' };
+            }
+        } catch (err: any) {
+            // 备用方案：使用场景脚本
+            const options = {
+                name: 'cocos-mcp-server',
+                method: 'getNodeInfo',
+                args: [nodeUuid]
+            };
+
+            try {
+                const result = await Editor.Message.request('scene', 'execute-scene-script', options);
+                if (result.success && result.data.components) {
+                    const component = result.data.components.find((comp: any) => comp.type === componentType);
                     if (component) {
-                        resolve({
+                        return {
                             success: true,
                             data: {
                                 nodeUuid: nodeUuid,
                                 componentType: componentType,
-                                enabled: component.enabled !== undefined ? component.enabled : true,
-                                properties: this.extractComponentProperties(component)
+                                ...component
                             }
-                        });
+                        };
                     } else {
-                        resolve({ success: false, error: `Component '${componentType}' not found on node` });
+                        return { success: false, error: `Component '${componentType}' not found on node` };
                     }
                 } else {
-                    resolve({ success: false, error: 'Node not found or no components data' });
+                    return { success: false, error: result.error || 'Failed to get component info' };
                 }
-            }).catch((err: Error) => {
-                // 备用方案：使用场景脚本
-                const options = {
-                    name: 'cocos-mcp-server',
-                    method: 'getNodeInfo',
-                    args: [nodeUuid]
-                };
-                
-                Editor.Message.request('scene', 'execute-scene-script', options).then((result: any) => {
-                    if (result.success && result.data.components) {
-                        const component = result.data.components.find((comp: any) => comp.type === componentType);
-                        if (component) {
-                            resolve({
-                                success: true,
-                                data: {
-                                    nodeUuid: nodeUuid,
-                                    componentType: componentType,
-                                    ...component
-                                }
-                            });
-                        } else {
-                            resolve({ success: false, error: `Component '${componentType}' not found on node` });
-                        }
-                    } else {
-                        resolve({ success: false, error: result.error || 'Failed to get component info' });
-                    }
-                }).catch((err2: Error) => {
-                    resolve({ success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` });
-                });
-            });
-        });
+            } catch (err2: any) {
+                return { success: false, error: `Query failed: ${err.message}, Scene script failed: ${err2.message}` };
+            }
+        }
     }
 
     private extractComponentProperties(component: any): Record<string, any> {
@@ -453,14 +439,15 @@ export class ComponentTools implements ToolExecutor {
             return null;
         }
         try {
-            const nodeTree = await Editor.Message.request('scene', 'query-node-tree');
+            // 使用兼容层查询节点树
+            const nodeTree = await queryNodeTreeWithFallback();
             if (!nodeTree) {
                 console.warn('[findComponentTypeByUuid] Failed to query node tree.');
                 return null;
             }
 
             const queue: any[] = [nodeTree];
-            
+
             while (queue.length > 0) {
                 const currentNodeInfo = queue.shift();
                 if (!currentNodeInfo || !currentNodeInfo.uuid) {
@@ -468,7 +455,8 @@ export class ComponentTools implements ToolExecutor {
                 }
 
                 try {
-                    const fullNodeData = await Editor.Message.request('scene', 'query-node', currentNodeInfo.uuid);
+                    // 使用兼容层查询节点
+                    const fullNodeData = await queryNodeWithFallback(currentNodeInfo.uuid);
                     if (fullNodeData && fullNodeData.__comps__) {
                         for (const comp of fullNodeData.__comps__) {
                             const compAny = comp as any; // Cast to any to access dynamic properties
@@ -718,7 +706,7 @@ export class ComponentTools implements ToolExecutor {
                 let actualExpectedValue = processedValue;
                 
                 // Step 5: 获取原始节点数据来构建正确的路径
-                const rawNodeData = await Editor.Message.request('scene', 'query-node', nodeUuid);
+                const rawNodeData = await queryNodeWithFallback(nodeUuid);
                 if (!rawNodeData || !rawNodeData.__comps__) {
                     resolve({
                         success: false,
@@ -774,50 +762,34 @@ export class ComponentTools implements ToolExecutor {
                         assetType = 'cc.Prefab';
                     }
                     
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { 
+                    await setPropertyWithFallback(
+                        nodeUuid,
+                        propertyPath,
+                        {
                             value: processedValue,
                             type: assetType
                         }
-                    });
+                    );
                 } else if (componentType === 'cc.UITransform' && (property === '_contentSize' || property === 'contentSize')) {
                     // Special handling for UITransform contentSize - set width and height separately
                     const width = Number(value.width) || 100;
                     const height = Number(value.height) || 100;
                     
                     // Set width first
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: `__comps__.${rawComponentIndex}.width`,
-                        dump: { value: width }
-                    });
+                    await setPropertyWithFallback(nodeUuid, `__comps__.${rawComponentIndex}.width`, { value: width } );
                     
                     // Then set height
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: `__comps__.${rawComponentIndex}.height`,
-                        dump: { value: height }
-                    });
+                    await setPropertyWithFallback(nodeUuid, `__comps__.${rawComponentIndex}.height`, { value: height } );
                 } else if (componentType === 'cc.UITransform' && (property === '_anchorPoint' || property === 'anchorPoint')) {
                     // Special handling for UITransform anchorPoint - set anchorX and anchorY separately
                     const anchorX = Number(value.x) || 0.5;
                     const anchorY = Number(value.y) || 0.5;
                     
                     // Set anchorX first
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: `__comps__.${rawComponentIndex}.anchorX`,
-                        dump: { value: anchorX }
-                    });
+                    await setPropertyWithFallback(nodeUuid, `__comps__.${rawComponentIndex}.anchorX`, { value: anchorX } );
                     
                     // Then set anchorY  
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: `__comps__.${rawComponentIndex}.anchorY`,
-                        dump: { value: anchorY }
-                    });
+                    await setPropertyWithFallback(nodeUuid, `__comps__.${rawComponentIndex}.anchorY`, { value: anchorY } );
                 } else if (propertyType === 'color' && processedValue && typeof processedValue === 'object') {
                     // 特殊处理颜色属性，确保RGBA值正确
                     // Cocos Creator颜色值范围是0-255
@@ -830,14 +802,7 @@ export class ComponentTools implements ToolExecutor {
                     
                     console.log(`[ComponentTools] Setting color value:`, colorValue);
                     
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { 
-                            value: colorValue,
-                            type: 'cc.Color'
-                        }
-                    });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: colorValue, type: 'cc.Color' } );
                 } else if (propertyType === 'vec3' && processedValue && typeof processedValue === 'object') {
                     // 特殊处理Vec3属性
                     const vec3Value = {
@@ -846,14 +811,7 @@ export class ComponentTools implements ToolExecutor {
                         z: Number(processedValue.z) || 0
                     };
                     
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { 
-                            value: vec3Value,
-                            type: 'cc.Vec3'
-                        }
-                    });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: vec3Value, type: 'cc.Vec3' } );
                 } else if (propertyType === 'vec2' && processedValue && typeof processedValue === 'object') {
                     // 特殊处理Vec2属性
                     const vec2Value = {
@@ -861,14 +819,7 @@ export class ComponentTools implements ToolExecutor {
                         y: Number(processedValue.y) || 0
                     };
                     
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { 
-                            value: vec2Value,
-                            type: 'cc.Vec2'
-                        }
-                    });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: vec2Value, type: 'cc.Vec2' } );
                 } else if (propertyType === 'size' && processedValue && typeof processedValue === 'object') {
                     // 特殊处理Size属性
                     const sizeValue = {
@@ -876,25 +827,11 @@ export class ComponentTools implements ToolExecutor {
                         height: Number(processedValue.height) || 0
                     };
                     
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { 
-                            value: sizeValue,
-                            type: 'cc.Size'
-                        }
-                    });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: sizeValue, type: 'cc.Size' } );
                 } else if (propertyType === 'node' && processedValue && typeof processedValue === 'object' && 'uuid' in processedValue) {
                     // 特殊处理节点引用
                     console.log(`[ComponentTools] Setting node reference with UUID: ${processedValue.uuid}`);
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { 
-                            value: processedValue,
-                            type: 'cc.Node'
-                        }
-                    });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: processedValue, type: 'cc.Node' } );
                 } else if (propertyType === 'component' && typeof processedValue === 'string') {
                     // 特殊处理组件引用：通过节点UUID找到组件的__id__
                     const targetNodeUuid = processedValue;
@@ -936,7 +873,7 @@ export class ComponentTools implements ToolExecutor {
                     
                     try {
                         // 获取目标节点的组件信息
-                        const targetNodeData = await Editor.Message.request('scene', 'query-node', targetNodeUuid);
+                        const targetNodeData = await queryNodeWithFallback(targetNodeUuid);
                         if (!targetNodeData || !targetNodeData.__comps__) {
                             throw new Error(`Target node ${targetNodeUuid} not found or has no components`);
                         }
@@ -1004,14 +941,7 @@ export class ComponentTools implements ToolExecutor {
                         
                         // 尝试使用与节点/资源引用相同的格式：{uuid: componentId}
                         // 测试看是否能正确设置组件引用
-                        await Editor.Message.request('scene', 'set-property', {
-                            uuid: nodeUuid,
-                            path: propertyPath,
-                            dump: { 
-                                value: { uuid: componentId },  // 使用对象格式，像节点/资源引用一样
-                                type: expectedComponentType
-                            }
-                        });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: { uuid: componentId },  // 使用对象格式，像节点/资源引用一样 type: expectedComponentType } );
                         
                     } catch (error) {
                         console.error(`[ComponentTools] Error setting component reference:`, error);
@@ -1021,13 +951,7 @@ export class ComponentTools implements ToolExecutor {
                     // 特殊处理节点数组 - 保持预处理的格式
                     console.log(`[ComponentTools] Setting node array:`, processedValue);
                     
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { 
-                            value: processedValue  // 保持 [{uuid: "..."}, {uuid: "..."}] 格式
-                        }
-                    });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: processedValue  // 保持 [{uuid: "..."}, {uuid: "..."}] 格式 } );
                 } else if (propertyType === 'colorArray' && Array.isArray(processedValue)) {
                     // 特殊处理颜色数组
                     const colorArrayValue = processedValue.map((item: any) => {
@@ -1043,21 +967,10 @@ export class ComponentTools implements ToolExecutor {
                         }
                     });
                     
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { 
-                            value: colorArrayValue,
-                            type: 'cc.Color'
-                        }
-                    });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: colorArrayValue, type: 'cc.Color' } );
                 } else {
                     // Normal property setting for non-asset properties
-                    await Editor.Message.request('scene', 'set-property', {
-                        uuid: nodeUuid,
-                        path: propertyPath,
-                        dump: { value: processedValue }
-                    });
+                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: processedValue } );
                 }
                 
                 // Step 5: 等待Editor完成更新，然后验证设置结果
@@ -1113,11 +1026,8 @@ export class ComponentTools implements ToolExecutor {
                     return;
                 }
             }
-            // 首先尝试直接使用脚本名称作为组件类型
-            Editor.Message.request('scene', 'create-component', {
-                uuid: nodeUuid,
-                component: scriptName  // 使用脚本名称而非UUID
-            }).then(async (result: any) => {
+            // 使用兼容层添加脚本组件（自动回退到 execute-scene-script）
+            createComponentWithFallback(nodeUuid, scriptName).then(async (result: any) => {
                 // 等待一段时间让Editor完成组件添加
                 await new Promise(resolve => setTimeout(resolve, 100));
                 // 重新查询节点信息验证脚本是否真的添加成功
@@ -1745,7 +1655,7 @@ export class ComponentTools implements ToolExecutor {
      */
     private async quickVerifyAsset(nodeUuid: string, componentType: string, property: string): Promise<any> {
         try {
-            const rawNodeData = await Editor.Message.request('scene', 'query-node', nodeUuid);
+            const rawNodeData = await queryNodeWithFallback(nodeUuid);
             if (!rawNodeData || !rawNodeData.__comps__) {
                 return null;
             }
