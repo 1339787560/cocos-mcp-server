@@ -12,6 +12,7 @@ interface ToolConfig {
     name: string;
     enabled: boolean;
     description: string;
+    versionRequirement?: string; // 版本要求，如 "3.8.2", "3.8.6" 等
 }
 
 // 定义配置接口
@@ -62,6 +63,7 @@ module.exports = Editor.Panel.define({
                     const connectedClients = ref(0);
                     const httpUrl = ref('');
                     const isProcessing = ref(false);
+                    const currentVersion = ref('3.8.0'); // 默认版本
                     
                     const settings = ref<ServerSettings>({
                         port: 3000,
@@ -86,9 +88,49 @@ module.exports = Editor.Panel.define({
                     const disabledTools = computed(() => totalTools.value - enabledTools.value);
                     
 
-                    
+
                     const settingsChanged = ref(false);
-                    
+
+                    // 版本比较函数
+                    const compareVersions = (v1: string, v2: string): number => {
+                        const parts1 = v1.split('.').map(Number);
+                        const parts2 = v2.split('.').map(Number);
+                        for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+                            const p1 = parts1[i] || 0;
+                            const p2 = parts2[i] || 0;
+                            if (p1 < p2) return -1;
+                            if (p1 > p2) return 1;
+                        }
+                        return 0;
+                    };
+
+                    // 检查工具是否可用
+                    const isToolAvailable = (tool: ToolConfig): boolean => {
+                        if (!tool.versionRequirement) return true;
+                        return compareVersions(currentVersion.value, tool.versionRequirement) >= 0;
+                    };
+
+                    // 获取工具不可用的原因
+                    const getToolUnavailableReason = (tool: ToolConfig): string => {
+                        if (!tool.versionRequirement) return '';
+                        if (compareVersions(currentVersion.value, tool.versionRequirement) < 0) {
+                            return `需要 Cocos Creator ${tool.versionRequirement}+`;
+                        }
+                        return '';
+                    };
+
+                    // 获取当前版本
+                    const loadCurrentVersion = async () => {
+                        try {
+                            const version = (Editor as any).versions?.cocos || '3.8.0';
+                            currentVersion.value = version;
+                            console.log('[Vue App] Current Cocos Creator version:', version);
+                        } catch (error) {
+                            console.warn('[Vue App] Failed to get version, using default:', error);
+                            currentVersion.value = '3.8.0';
+                        }
+                    };
+
                     // 方法
                     const switchTab = (tabName: string) => {
                         activeTab.value = tabName;
@@ -292,6 +334,9 @@ module.exports = Editor.Panel.define({
                     
                     // 组件挂载时加载数据
                     onMounted(async () => {
+                        // 加载当前版本
+                        await loadCurrentVersion();
+
                         // 加载工具管理器状态
                         await loadToolManagerState();
                         
@@ -345,13 +390,14 @@ module.exports = Editor.Panel.define({
                         availableTools,
                         toolCategories,
                         settingsChanged,
-                        
+                        currentVersion,
+
                         // 计算属性
                         statusClass,
                         totalTools,
                         enabledTools,
                         disabledTools,
-                        
+
                         // 方法
                         switchTab,
                         toggleServer,
@@ -364,7 +410,9 @@ module.exports = Editor.Panel.define({
                         saveChanges,
                         toggleCategoryTools,
                         getToolsByCategory,
-                        getCategoryDisplayName
+                        getCategoryDisplayName,
+                        isToolAvailable,
+                        getToolUnavailableReason
                     };
                 },
                 template: readFileSync(join(__dirname, '../../../static/template/vue/mcp-server-app.html'), 'utf-8'),

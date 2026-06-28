@@ -120,11 +120,29 @@ export class ToolManager {
             for (const [category, toolSet] of Object.entries(tools)) {
                 const toolDefinitions = toolSet.getTools();
                 toolDefinitions.forEach((tool: any) => {
+                    // 根据工具类别设置版本要求
+                    let versionRequirement: string | undefined;
+                    if (category === 'referenceImage') {
+                        versionRequirement = '3.8.2';
+                    } else if (category === 'sceneAdvanced') {
+                        // 部分高级场景工具需要 3.8.6+
+                        const advancedTools386 = [
+                            'reset_node_property', 'move_array_element', 'remove_array_element',
+                            'restore_prefab', 'execute_component_method',
+                            'query_scene_classes', 'query_scene_components',
+                            'query_component_has_script', 'query_nodes_by_asset_uuid'
+                        ];
+                        if (advancedTools386.includes(tool.name)) {
+                            versionRequirement = '3.8.6';
+                        }
+                    }
+
                     this.availableTools.push({
                         category: category,
                         name: tool.name,
                         enabled: true, // 默认启用
-                        description: tool.description
+                        description: tool.description,
+                        versionRequirement: versionRequirement
                     });
                 });
             }

@@ -613,8 +613,7 @@ export class NodeTools implements ToolExecutor {
             } catch (err2: any) {
                 return { success: false, error: `Direct API failed: ${err.message}, Scene script failed: ${err2.message}` };
             }
-            });
-        });
+        }
     }
 
     private searchNodeInTree(node: any, targetName: string): any {

@@ -941,8 +941,11 @@ export class ComponentTools implements ToolExecutor {
                         
                         // 尝试使用与节点/资源引用相同的格式：{uuid: componentId}
                         // 测试看是否能正确设置组件引用
-                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: { uuid: componentId },  // 使用对象格式，像节点/资源引用一样 type: expectedComponentType } );
-                        
+                        await setPropertyWithFallback(nodeUuid, propertyPath, {
+                            value: { uuid: componentId },
+                            type: expectedComponentType
+                        });
+
                     } catch (error) {
                         console.error(`[ComponentTools] Error setting component reference:`, error);
                         throw error;
@@ -950,8 +953,10 @@ export class ComponentTools implements ToolExecutor {
                 } else if (propertyType === 'nodeArray' && Array.isArray(processedValue)) {
                     // 特殊处理节点数组 - 保持预处理的格式
                     console.log(`[ComponentTools] Setting node array:`, processedValue);
-                    
-                    await setPropertyWithFallback(nodeUuid, propertyPath, { value: processedValue  // 保持 [{uuid: "..."}, {uuid: "..."}] 格式 } );
+
+                    await setPropertyWithFallback(nodeUuid, propertyPath, {
+                        value: processedValue
+                    });
                 } else if (propertyType === 'colorArray' && Array.isArray(processedValue)) {
                     // 特殊处理颜色数组
                     const colorArrayValue = processedValue.map((item: any) => {

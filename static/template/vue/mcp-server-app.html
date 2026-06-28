@@ -103,13 +103,21 @@
                             </div>
                         </div>
                         <div class="tool-items">
-                            <div v-for="tool in getToolsByCategory(category)" :key="tool.name" class="tool-item">
-                                <ui-checkbox 
+                            <div v-for="tool in getToolsByCategory(category)" :key="tool.name"
+                                 class="tool-item"
+                                 :class="{ 'tool-unavailable': !isToolAvailable(tool) }">
+                                <ui-checkbox
                                     :value="tool.enabled"
+                                    :disabled="!isToolAvailable(tool)"
                                     @change="(event) => updateToolStatus(category, tool.name, event.target.checked)"
                                 ></ui-checkbox>
                                 <div class="tool-info">
-                                    <div class="tool-name">{{ tool.name }}</div>
+                                    <div class="tool-name">
+                                        {{ tool.name }}
+                                        <span v-if="!isToolAvailable(tool)" class="version-badge">
+                                            {{ getToolUnavailableReason(tool) }}
+                                        </span>
+                                    </div>
                                     <div class="tool-description">{{ tool.description }}</div>
                                 </div>
                             </div>

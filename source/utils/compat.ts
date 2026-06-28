@@ -18,7 +18,7 @@ export function getCocosVersion(): string {
     } catch {
         cachedVersion = '3.8.0';
     }
-    return cachedVersion;
+    return cachedVersion!;
 }
 
 /**

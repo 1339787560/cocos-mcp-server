@@ -132,6 +132,7 @@ export interface ToolConfig {
     name: string;
     enabled: boolean;
     description: string;
+    versionRequirement?: string; // 版本要求，如 "3.8.2", "3.8.6" 等
 }
 
 export interface ToolConfiguration {
