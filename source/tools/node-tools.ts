@@ -509,22 +509,22 @@ export class NodeTools implements ToolExecutor {
                 };
             }
 
-            // 根据实际返回的数据结构解析节点信息
+            // 消费归一化结果(compat.ts 已统一场景脚本与 query-node 两种来源)
             const info: NodeInfo = {
-                uuid: nodeData.uuid?.value || uuid,
-                name: nodeData.name?.value || 'Unknown',
-                active: nodeData.active?.value !== undefined ? nodeData.active.value : true,
-                position: nodeData.position?.value || { x: 0, y: 0, z: 0 },
-                rotation: nodeData.rotation?.value || { x: 0, y: 0, z: 0 },
-                scale: nodeData.scale?.value || { x: 1, y: 1, z: 1 },
-                parent: nodeData.parent?.value?.uuid || null,
+                uuid: nodeData.uuid || uuid,
+                name: nodeData.name || 'Unknown',
+                active: nodeData.active !== undefined ? nodeData.active : true,
+                position: nodeData.position || { x: 0, y: 0, z: 0 },
+                rotation: nodeData.rotation || { x: 0, y: 0, z: 0, w: 1 },
+                scale: nodeData.scale || { x: 1, y: 1, z: 1 },
+                parent: nodeData.parent || null,
                 children: nodeData.children || [],
-                components: (nodeData.__comps__ || []).map((comp: any) => ({
-                    type: comp.__type__ || 'Unknown',
+                components: (nodeData.components || []).map((comp: any) => ({
+                    type: comp.cid || comp.name || 'Unknown',
                     enabled: comp.enabled !== undefined ? comp.enabled : true
                 })),
-                layer: nodeData.layer?.value || 1073741824,
-                mobility: nodeData.mobility?.value || 0
+                layer: nodeData.layer || 1073741824,
+                mobility: nodeData.mobility !== undefined ? nodeData.mobility : 0
             };
             return { success: true, data: info };
         } catch (err: any) {

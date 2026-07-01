@@ -352,6 +352,58 @@ export class SceneAdvancedTools implements ToolExecutor {
                     },
                     required: ['assetUuid']
                 }
+            },
+            {
+                name: 'create_sprite_animation',
+                description: 'Create a sprite-frame sequence animation (.anim asset) from a list of SpriteFrame asset UUIDs and attach it to a node\'s cc.Animation component. Generates a reusable cc.AnimationClip asset at savePath, sets it as the node\'s defaultClip, and plays it in preview.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        nodeUuid: {
+                            type: 'string',
+                            description: 'Target node UUID. A cc.Animation component is added if absent. A cc.Sprite component is required on the node (spriteFrame track targets cc.Sprite.spriteFrame).'
+                        },
+                        spriteFrameUuids: {
+                            type: 'array',
+                            items: { type: 'string' },
+                            description: 'Ordered list of SpriteFrame asset UUIDs forming the sequence frames'
+                        },
+                        sampleRate: {
+                            type: 'number',
+                            description: 'Frames per second (fps). Default 10.',
+                            default: 10
+                        },
+                        clipName: {
+                            type: 'string',
+                            description: 'AnimationClip name and asset filename stem. Default "SpriteAnim".'
+                        },
+                        savePath: {
+                            type: 'string',
+                            description: 'Asset save path (db:// url). Default "db://assets/<clipName>.anim".'
+                        },
+                        loop: {
+                            type: 'boolean',
+                            description: 'Loop playback. Default true.',
+                            default: true
+                        }
+                    },
+                    required: ['nodeUuid', 'spriteFrameUuids']
+                }
+            },
+            {
+                name: 'reload_extension',
+                description: 'Reload a CocosCreator extension by name (default: cocos-mcp-server). Use after rebuilding + syncing the extension dist/ to pick up code changes without restarting the editor. Sends Editor.Message "extension:reload-extension".',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        extensionName: {
+                            type: 'string',
+                            description: 'Extension package name. Default "cocos-mcp-server".',
+                            default: 'cocos-mcp-server'
+                        }
+                    },
+                    required: []
+                }
             }
         ];
     }
@@ -419,9 +471,73 @@ export class SceneAdvancedTools implements ToolExecutor {
                 return await this.queryComponentHasScript(args.className);
             case 'query_nodes_by_asset_uuid':
                 return await this.queryNodesByAssetUuid(args.assetUuid);
+            case 'create_sprite_animation':
+                return await this.createSpriteAnimation(args);
+            case 'reload_extension':
+                return await this.reloadExtension(args.extensionName || 'cocos-mcp-server');
             default:
                 throw new Error(`Unknown tool: ${toolName}`);
         }
+    }
+
+    /** 重载扩展(无需重启编辑器)。改完代码 build+sync 后调用,等价扩展管理器重载。 */
+    private async reloadExtension(extensionName: string): Promise<ToolResponse> {
+        return new Promise((resolve) => {
+            // Cocos 3.8 extension 通道消息名为 'reload',参数为扩展名
+            Editor.Message.request('extension', 'reload', extensionName).then((result: any) => {
+                resolve({
+                    success: true,
+                    message: `Extension '${extensionName}' reloaded`,
+                    data: { result }
+                });
+            }).catch((err: Error) => {
+                resolve({ success: false, error: `Failed to reload extension '${extensionName}': ${err.message}` });
+            });
+        });
+    }
+
+    /**
+     * 创建序列帧动画:生成 .anim 资产 + 挂到节点 cc.Animation + preview 播放。
+     * 实际逻辑在场景脚本 createSpriteFrameAnimation 中执行(运行时可访问引擎 API + assetManager)。
+     */
+    private async createSpriteAnimation(args: any): Promise<ToolResponse> {
+        const nodeUuid: string = args.nodeUuid;
+        const spriteFrameUuids: string[] = args.spriteFrameUuids || [];
+        const sampleRate: number = args.sampleRate || 10;
+        const clipName: string = args.clipName || 'SpriteAnim';
+        const savePath: string = args.savePath || `db://assets/${clipName}.anim`;
+        const loop: boolean = args.loop !== false;
+
+        if (!nodeUuid) {
+            return { success: false, error: 'nodeUuid is required' };
+        }
+        if (!spriteFrameUuids.length) {
+            return { success: false, error: 'spriteFrameUuids must be a non-empty array' };
+        }
+
+        return new Promise((resolve) => {
+            Editor.Message.request('scene', 'execute-scene-script', {
+                name: 'cocos-mcp-server',
+                method: 'createSpriteFrameAnimation',
+                args: [nodeUuid, spriteFrameUuids, sampleRate, clipName, savePath, loop]
+            }).then((result: any) => {
+                if (result && result.success) {
+                    resolve({
+                        success: true,
+                        message: `Sprite animation '${clipName}' created at ${savePath} and attached to node ${nodeUuid}`,
+                        data: result.data || {}
+                    });
+                } else {
+                    resolve({
+                        success: false,
+                        error: result?.error || 'Failed to create sprite animation',
+                        instruction: result?.instruction
+                    });
+                }
+            }).catch((err: Error) => {
+                resolve({ success: false, error: err.message });
+            });
+        });
     }
 
     private async resetNodeProperty(uuid: string, path: string): Promise<ToolResponse> {

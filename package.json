@@ -141,17 +141,20 @@
         "scene": {
             "script": "./dist/scene.js",
             "methods": [
+                "testAsyncMethod",
                 "createNewScene",
                 "addComponentToNode",
                 "removeComponentFromNode",
                 "getNodeInfo",
+                "getComponentDetail",
                 "getAllNodes",
                 "findNodeByName",
                 "setNodeProperty",
                 "setComponentProperty",
                 "getCurrentSceneInfo",
                 "getSceneHierarchy",
-                "createPrefabFromNode"
+                "createPrefabFromNode",
+                "createSpriteFrameAnimation"
             ]
         }
     }

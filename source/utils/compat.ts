@@ -118,26 +118,20 @@ export async function queryNodeTreeFallback(): Promise<any> {
 }
 
 /**
- * 带回退的创建组件
- * 先尝试直接 API，失败后使用 execute-scene-script
+ * 添加组件(无运行时回退)。
+ * 只用官方 create-component 消息——它走编辑器管线,组件持久化到场景树。
+ * 旧版回退到场景脚本 node.addComponent 走运行时,不持久化,query-node 验证看不到,
+ * 造成"添加失败但看似成功"的混乱。现改为:create-component 失败直接抛真实错误。
+ * 注:create-component 在 3.8.1 即可用(已确认 app.asar 注册),旧注释"3.8.6+"有误。
  */
 export async function createComponentWithFallback(
     nodeUuid: string,
     componentType: string
 ): Promise<any> {
-    // 先尝试直接 API（3.8.6+）
-    const result = await safeMessageRequest('scene', 'create-component', {
+    return await Editor.Message.request('scene', 'create-component', {
         uuid: nodeUuid,
         component: componentType
     });
-
-    if (result !== null) {
-        return result;
-    }
-
-    // 回退到 execute-scene-script
-    console.log(`[MCP Compat] create-component API not available, falling back to execute-scene-script`);
-    return await addComponentFallback(nodeUuid, componentType);
 }
 
 /**
@@ -164,37 +158,79 @@ export async function removeComponentWithFallback(
 }
 
 /**
- * 带回退的查询节点
- * 先尝试直接 API，失败后使用 execute-scene-script
+ * 查询单个节点信息(归一化)。
+ * 以场景脚本 getNodeInfo 为主路径——已证实可靠:组件类型名正确、能找到孙节点、
+ * 新建节点立即可见。query-node 消息的 dump 格式 fragile(__type__ 字段常缺失导致 "Unknown"),
+ * 仅作兜底。两条路径结果统一为 {uuid,name,active,position,rotation,scale,parent,children,components:[{cid,name,index,enabled}]}。
  */
 export async function queryNodeWithFallback(nodeUuid: string): Promise<any> {
-    // 先尝试直接 API（3.8.6+）
-    const result = await safeMessageRequest('scene', 'query-node', nodeUuid);
-
-    if (result !== null) {
-        return result;
+    // 主路径:场景脚本(归一化输出)
+    try {
+        const result = await Editor.Message.request('scene', 'execute-scene-script', {
+            name: 'cocos-mcp-server',
+            method: 'getNodeInfo',
+            args: [nodeUuid]
+        });
+        if (result && result.success && result.data) {
+            return result.data;
+        }
+        // 场景脚本明确返回失败(节点不存在等)——直接透传,不再尝试更脆弱的 query-node
+        if (result && result.success === false) {
+            return null;
+        }
+    } catch (err: any) {
+        console.warn(`[MCP Compat] scene-script getNodeInfo failed: ${err?.message}`);
     }
-
-    // 回退到 execute-scene-script
-    console.log(`[MCP Compat] query-node API not available, falling back to execute-scene-script`);
-    return await queryNodeFallback(nodeUuid);
+    // 兜底:query-node 消息(归一化 query-node dump)
+    const dump = await safeMessageRequest('scene', 'query-node', nodeUuid);
+    if (dump) {
+        return normalizeQueryNodeDump(dump);
+    }
+    return null;
 }
 
 /**
- * 带回退的查询节点树
- * 先尝试直接 API，失败后使用 execute-scene-script
+ * 查询节点树(归一化)。优先场景脚本 getAllNodes(归一化树,含 components cid),
+ * 兜底官方 query-node-tree。
  */
 export async function queryNodeTreeWithFallback(): Promise<any> {
-    // 先尝试直接 API（3.8.6+）
-    const result = await safeMessageRequest('scene', 'query-node-tree');
-
-    if (result !== null) {
-        return result;
+    try {
+        const result = await Editor.Message.request('scene', 'execute-scene-script', {
+            name: 'cocos-mcp-server',
+            method: 'getAllNodes',
+            args: []
+        });
+        if (result && result.success && result.data) {
+            return result.data;
+        }
+    } catch (err: any) {
+        console.warn(`[MCP Compat] scene-script getAllNodes failed: ${err?.message}`);
     }
+    // 兜底:官方 query-node-tree
+    const tree = await safeMessageRequest('scene', 'query-node-tree');
+    return tree || null;
+}
 
-    // 回退到 execute-scene-script
-    console.log(`[MCP Compat] query-node-tree API not available, falling back to execute-scene-script`);
-    return await queryNodeTreeFallback();
+/** 把 query-node 的 dump 格式归一化为与场景脚本 getNodeInfo 一致的形态 */
+function normalizeQueryNodeDump(dump: any): any {
+    if (!dump) return null;
+    const val = (v: any, fallback?: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : (v !== undefined ? v : fallback);
+    const comps = (dump.__comps__ || []).map((comp: any, index: number) => {
+        const cid = comp.__type__ || comp.cid || comp.type || 'Unknown';
+        return { cid, name: cid.replace(/^cc\./, ''), index, enabled: comp.enabled !== undefined ? comp.enabled : true };
+    });
+    return {
+        uuid: val(dump.uuid),
+        name: val(dump.name, 'Unknown'),
+        active: val(dump.active, true),
+        layer: val(dump.layer),
+        position: val(dump.position, { x: 0, y: 0, z: 0 }),
+        rotation: val(dump.rotation, { x: 0, y: 0, z: 0, w: 1 }),
+        scale: val(dump.scale, { x: 1, y: 1, z: 1 }),
+        parent: val(dump.parent?.uuid || dump.parent),
+        children: dump.children || [],
+        components: comps
+    };
 }
 
 /**
@@ -249,26 +285,20 @@ export async function setPropertyFallback(
 }
 
 /**
- * 带回退的设置属性
- * 先尝试直接 API，失败后使用 execute-scene-script
+ * 设置属性(无运行时回退)。
+ * 只用官方 set-property 消息——它走编辑器序列化管线,改动持久化 + 触发 Inspector/撤销。
+ * 旧版回退到场景脚本 setNodeProperty 的 `node[path]=value` 对 `__comps__.N.prop` 点路径是
+ * 无效赋值且静默成功,造成假阳性。现改为:set-property 失败直接抛真实错误,由调用方验证读回。
  */
 export async function setPropertyWithFallback(
     uuid: string,
     path: string,
     dump: any
 ): Promise<any> {
-    // 先尝试直接 API（3.8.6+）
-    const result = await safeMessageRequest('scene', 'set-property', {
+    // 直接调用,不吞错误——失败让调用方感知并报告
+    return await Editor.Message.request('scene', 'set-property', {
         uuid,
         path,
         dump
     });
-
-    if (result !== null) {
-        return result;
-    }
-
-    // 回退到 execute-scene-script
-    console.log(`[MCP Compat] set-property API not available, falling back to execute-scene-script`);
-    return await setPropertyFallback(uuid, path, dump);
 }
