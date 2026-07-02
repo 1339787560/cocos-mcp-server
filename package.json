@@ -67,6 +67,11 @@
                     "stopServer"
                 ]
             },
+            "reload-mcp-server": {
+                "methods": [
+                    "reloadMcpServer"
+                ]
+            },
             "get-server-status": {
                 "methods": [
                     "getServerStatus"

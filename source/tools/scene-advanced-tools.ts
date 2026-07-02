@@ -404,6 +404,11 @@ export class SceneAdvancedTools implements ToolExecutor {
                     },
                     required: []
                 }
+            },
+            {
+                name: 'reload_mcp_server',
+                description: '★ Hot-reload cocos-mcp-server main-process code. Stops :3000, clears dist require.cache, re-requires ToolManager/MCPServer, restarts. Picks up changes to tools/*, compat.ts, mcp-server.ts, settings.ts without editor restart. Only main.ts itself needs editor restart. Prefer this over reload_extension for code changes.',
+                inputSchema: { type: 'object', properties: {}, required: [] }
             }
         ];
     }
@@ -475,6 +480,8 @@ export class SceneAdvancedTools implements ToolExecutor {
                 return await this.createSpriteAnimation(args);
             case 'reload_extension':
                 return await this.reloadExtension(args.extensionName || 'cocos-mcp-server');
+            case 'reload_mcp_server':
+                return await this.reloadMcpServer();
             default:
                 throw new Error(`Unknown tool: ${toolName}`);
         }
@@ -492,6 +499,25 @@ export class SceneAdvancedTools implements ToolExecutor {
                 });
             }).catch((err: Error) => {
                 resolve({ success: false, error: `Failed to reload extension '${extensionName}': ${err.message}` });
+            });
+        });
+    }
+
+    /**
+     * 真正的热重载:停 :3000 → 清 dist cache → 动态 re-require → 重启。
+     * 主进程代码(tools/*, compat, mcp-server.ts)改完 build+sync 后调用,免重启编辑器。
+     * 经 main.ts 暴露的 reload-mcp-server 主进程方法实现。
+     */
+    private async reloadMcpServer(): Promise<ToolResponse> {
+        return new Promise((resolve) => {
+            Editor.Message.request('cocos-mcp-server', 'reload-mcp-server').then((result: any) => {
+                resolve({
+                    success: result?.success !== false,
+                    message: result?.message || 'MCP server reload requested',
+                    data: result || {}
+                });
+            }).catch((err: Error) => {
+                resolve({ success: false, error: `Failed to reload MCP server: ${err.message}` });
             });
         });
     }

@@ -318,7 +318,7 @@ export class ComponentTools implements ToolExecutor {
                         error: `Component '${componentType}' was not found on node after addition. Available components: ${availableList}` +
                                (diagError ? `\n真实原因: ${diagError}` : ''),
                         instruction: diagError && /conflict/i.test(diagError)
-                            ? `cc.Label/cc.RichText/cc.Sprite 等渲染组件互斥,不能共存于同一节点。先把已有渲染组件 remove_component 再加,或换一个节点。`
+                            ? `[v4-hotreload-marker] cc.Label/cc.RichText/cc.Sprite 等渲染组件互斥,不能共存于同一节点。先把已有渲染组件 remove_component 再加,或换一个节点。`
                             : undefined
                     });
                 }

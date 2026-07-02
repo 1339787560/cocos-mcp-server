@@ -766,7 +766,7 @@ export class NodeTools implements ToolExecutor {
                     }
 
                     updatePromises.push(
-                        setPropertyWithFallback(uuid, 'position', { value: normalizedPosition.value })
+                        setPropertyWithFallback(uuid, 'position', { value: normalizedPosition.value, type: 'cc.Vec3' })
                     );
                     updates.push('position');
                 }
@@ -778,7 +778,7 @@ export class NodeTools implements ToolExecutor {
                     }
 
                     updatePromises.push(
-                        setPropertyWithFallback(uuid, 'rotation', { value: normalizedRotation.value })
+                        setPropertyWithFallback(uuid, 'rotation', { value: normalizedRotation.value, type: 'cc.Vec3' })
                     );
                     updates.push('rotation');
                 }
@@ -790,7 +790,7 @@ export class NodeTools implements ToolExecutor {
                     }
 
                     updatePromises.push(
-                        setPropertyWithFallback(uuid, 'scale', { value: normalizedScale.value })
+                        setPropertyWithFallback(uuid, 'scale', { value: normalizedScale.value, type: 'cc.Vec3' })
                     );
                     updates.push('scale');
                 }

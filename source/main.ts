@@ -214,30 +214,90 @@ export const methods: { [key: string]: (...any: any) => any } = {
 
     async getEnabledTools() {
         return toolManager.getEnabledTools();
+    },
+
+    /**
+     * 热重载 MCP 服务器主进程代码。
+     * 流程:stop 旧 :3000 → 清 dist 子模块 require.cache → 动态 require 新实例 → start。
+     * 使 tools/*、compat、mcp-server.ts、settings.ts 改动免重启编辑器生效。
+     * 限制:main.ts 自身改动需重启编辑器(此方法在 main.ts 内)。
+     * 经 Editor.Message.request('cocos-mcp-server', 'reload-mcp-server') 调用。
+     */
+    async reloadMcpServer() {
+        try {
+            // 1. 停旧
+            if (mcpServer) {
+                try { mcpServer.stop(); } catch { /* ignore */ }
+                mcpServer = null;
+            }
+            // 2. 清 dist 子模块 cache(不含 main.js 自身)
+            const distDir = __dirname;
+            for (const k of Object.keys(require.cache)) {
+                if (k.startsWith(distDir) && !k.endsWith('main.js')) {
+                    try { delete require.cache[k]; } catch { /* ignore */ }
+                }
+            }
+            // 3. 动态 require 新实例
+            const { ToolManager } = require('./tools/tool-manager');
+            const { MCPServer } = require('./mcp-server');
+            const { readSettings } = require('./settings');
+            toolManager = new ToolManager();
+            const settings = readSettings();
+            const server = new MCPServer(settings);
+            mcpServer = server;
+            server.updateEnabledTools(toolManager.getEnabledTools());
+            // 4. 始终启动(不受 autoStart 限制,热重载场景必须重启 :3000)
+            await server.start();
+            return { success: true, message: 'MCP server hot-reloaded with fresh code', toolCount: toolManager.getEnabledTools().length };
+        } catch (e: any) {
+            return { success: false, error: e?.message || String(e), stack: e?.stack };
+        }
     }
 };
 
 /**
  * @en Method Triggered on Extension Startup
  * @zh 扩展启动时触发的方法
+ *
+ * 主进程热重载策略:每次 load() 清 dist 下子模块 require.cache(不含 main.js 自身),
+ * 再用动态 require 取 ToolManager/MCPServer/readSettings 的新实例。
+ * 这样 extension:reload 后,主进程代码(tools/*、mcp-server、compat、settings)真替换。
+ * 限制:main.ts 自身改动仍需重启编辑器(它由 Cocos 顶层 require,不走 load() 内动态路径)。
  */
 export function load() {
     console.log('Cocos MCP Server extension loaded');
-    
+
+    const distDir = __dirname;
+    // 清 dist 下所有子模块 cache(含 mcp-server.ts、tools/*、utils/*、settings.ts),
+    // 不含 main.js 自身(避免 load() 执行中自删引起异常)
+    try {
+        for (const k of Object.keys(require.cache)) {
+            if (k.startsWith(distDir) && !k.endsWith('main.js')) {
+                try { delete require.cache[k]; } catch { /* ignore */ }
+            }
+        }
+    } catch { /* ignore */ }
+
+    // 动态 require 取新实例(clear 后必为最新代码)
+    const { ToolManager } = require('./tools/tool-manager');
+    const { MCPServer } = require('./mcp-server');
+    const { readSettings } = require('./settings');
+
     // 初始化工具管理器
     toolManager = new ToolManager();
-    
+
     // 读取设置
     const settings = readSettings();
-    mcpServer = new MCPServer(settings);
-    
+    const server = new MCPServer(settings);
+    mcpServer = server;
+
     // 初始化MCP服务器的工具列表
     const enabledTools = toolManager.getEnabledTools();
-    mcpServer.updateEnabledTools(enabledTools);
-    
+    server.updateEnabledTools(enabledTools);
+
     // 如果设置了自动启动，则启动服务器
     if (settings.autoStart) {
-        mcpServer.start().catch(err => {
+        server.start().catch((err: any) => {
             console.error('Failed to auto-start MCP server:', err);
         });
     }

@@ -93,20 +93,28 @@ function extractComponentProps(comp: any): Record<string, any> {
 function normalizeValue(val: any): any {
     if (val === null || val === undefined) return val;
     if (typeof val !== 'object') return val;
+
+    // 1. 资产引用优先(SpriteFrame/Texture/Material/AudioClip 等都有 uuid,
+    //    且 SpriteFrame 还暴露 width/height getter,会被下面的 Size 分支误吞)
+    if (val._uuid || (val.uuid && typeof val.uuid === 'string')) {
+        return { uuid: val._uuid || val.uuid, type: val.constructor ? val.constructor.name : 'Asset' };
+    }
+
     const has = (...ks: string[]) => ks.every(k => k in val);
     try {
+        // 2. Color (rgba)
         if (has('r', 'g', 'b')) {
             const a = (val.a !== undefined) ? val.a : 255;
             return { r: val.r, g: val.g, b: val.b, a };
         }
+        // 3. Size 必须在 Vec2 之前:Cocos Size 有 x/y 别名(Size.x=width),
+        //    若先查 x/y 会把 Size 误判为 Vec2(contentSize 验证假阴性根因)
+        if (has('width', 'height')) return { width: val.width, height: val.height };
+        // 4. Vec
         if (has('x', 'y', 'z', 'w')) return { x: val.x, y: val.y, z: val.z, w: val.w };
         if (has('x', 'y', 'z')) return { x: val.x, y: val.y, z: val.z };
         if (has('x', 'y')) return { x: val.x, y: val.y };
-        if (has('width', 'height')) return { width: val.width, height: val.height };
     } catch { /* fallthrough */ }
-    if (val._uuid || (val.uuid && typeof val.uuid === 'string')) {
-        return { uuid: val._uuid || val.uuid, type: val.constructor ? val.constructor.name : 'Asset' };
-    }
     if (Array.isArray(val)) {
         return val.slice(0, 64).map(normalizeValue);
     }
@@ -160,7 +168,7 @@ export const methods: { [key: string]: (...any: any) => any } = {
             const { director, js } = require('cc');
             const scene = director.getScene();
             if (!scene) return { success: false, error: 'No active scene' };
-            const node = scene.getChildByUuid(nodeUuid);
+            const node = findNodeByUuidDeep(scene, nodeUuid);
             if (!node) return { success: false, error: `Node with UUID ${nodeUuid} not found` };
             const ComponentClass = js.getClassByName(componentType);
             if (!ComponentClass) return { success: false, error: `Component type ${componentType} not found` };
@@ -176,7 +184,7 @@ export const methods: { [key: string]: (...any: any) => any } = {
             const { director, js } = require('cc');
             const scene = director.getScene();
             if (!scene) return { success: false, error: 'No active scene' };
-            const node = scene.getChildByUuid(nodeUuid);
+            const node = findNodeByUuidDeep(scene, nodeUuid);
             if (!node) return { success: false, error: `Node with UUID ${nodeUuid} not found` };
             const ComponentClass = js.getClassByName(componentType);
             if (!ComponentClass) return { success: false, error: `Component type ${componentType} not found` };
@@ -196,7 +204,7 @@ export const methods: { [key: string]: (...any: any) => any } = {
             if (!scene) return { success: false, error: 'No active scene' };
             const node = new Node(name);
             if (parentUuid) {
-                const parent = scene.getChildByUuid(parentUuid);
+                const parent = findNodeByUuidDeep(scene, parentUuid);
                 if (parent) parent.addChild(node); else scene.addChild(node);
             } else {
                 scene.addChild(node);
@@ -303,7 +311,7 @@ export const methods: { [key: string]: (...any: any) => any } = {
             const { director } = require('cc');
             const scene = director.getScene();
             if (!scene) return { success: false, error: 'No active scene' };
-            const node = scene.getChildByUuid(nodeUuid);
+            const node = findNodeByUuidDeep(scene, nodeUuid);
             if (!node) return { success: false, error: `Node with UUID ${nodeUuid} not found` };
             if (property === 'position') node.setPosition(value.x || 0, value.y || 0, value.z || 0);
             else if (property === 'rotation') node.setRotationFromEuler(value.x || 0, value.y || 0, value.z || 0);
@@ -348,7 +356,7 @@ export const methods: { [key: string]: (...any: any) => any } = {
             const { director, js } = require('cc');
             const scene = director.getScene();
             if (!scene) return { success: false, error: 'No active scene' };
-            const node = scene.getChildByUuid(nodeUuid);
+            const node = findNodeByUuidDeep(scene, nodeUuid);
             if (!node) return { success: false, error: `Node with UUID ${nodeUuid} not found` };
             const ComponentClass = js.getClassByName(componentType);
             if (!ComponentClass) return { success: false, error: `Component type ${componentType} not found` };
