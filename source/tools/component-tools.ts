@@ -1,6 +1,35 @@
 import { ToolDefinition, ToolResponse, ToolExecutor, ComponentInfo } from '../types';
 import { createComponentWithFallback, removeComponentWithFallback, queryNodeWithFallback, queryNodeTreeWithFallback, setPropertyWithFallback, safeMessageRequest } from '../utils/compat';
 
+/**
+ * 从 value 形态推断 propertyType。与 mcp_adapter.py 的推断规则对齐,
+ * 让调用方(含 adapter 透传)免显式声明 propertyType。
+ * 规则:
+ *  - hex 字符串 #RRGGBB/#RRGGBBAA → color
+ *  - 普通字符串 → string
+ *  - bool → boolean;number → number
+ *  - dict {width,height} → size;{x,y,z} → vec3;{x,y} → vec2;{r,g} → color
+ *  - 其余 → string(兜底)
+ */
+export function inferPropertyTypeFromValue(value: any, propertyName?: string): string {
+    if (typeof value === 'boolean') return 'boolean';
+    if (typeof value === 'number') return 'number';
+    if (typeof value === 'string') {
+        if (value.startsWith('#') && (value.length === 7 || value.length === 9) &&
+            /^[0-9a-fA-F]+$/.test(value.slice(1))) {
+            return 'color';
+        }
+        return 'string';
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        if ('width' in value && 'height' in value) return 'size';
+        if ('x' in value && 'y' in value && 'z' in value) return 'vec3';
+        if ('x' in value && 'y' in value) return 'vec2';
+        if ('r' in value && 'g' in value) return 'color';
+    }
+    return 'string';
+}
+
 export class ComponentTools implements ToolExecutor {
     getTools(): ToolDefinition[] {
         return [
@@ -98,7 +127,7 @@ export class ComponentTools implements ToolExecutor {
                         },
                         propertyType: {
                             type: 'string',
-                            description: 'Property type - Must explicitly specify the property data type for correct value conversion and validation',
+                            description: 'Property type - 可选,缺省时自动从 value 推断。显式指定可覆盖推断,适配歧义场景(如 hex 字符串可能是 color 也可能是 string)',
                             enum: [
                                 'string', 'number', 'boolean', 'integer', 'float',
                                 'color', 'vec2', 'vec3', 'size',
@@ -144,7 +173,7 @@ export class ComponentTools implements ToolExecutor {
                                 '• stringArray: ["item1","item2"] (array of strings)'
                         }
                     },
-                    required: ['nodeUuid', 'componentType', 'property', 'propertyType', 'value']
+                    required: ['nodeUuid', 'componentType', 'property', 'value']
                 }
             },
             {
@@ -224,9 +253,27 @@ export class ComponentTools implements ToolExecutor {
                     return;
                 }
             }
-            // 使用 create-component 消息(无运行时回退);验证带重试克服序列化时序
+            // 使用 create-component 消息(主路径);失败则回退场景脚本 node.addComponent
             try {
-                await createComponentWithFallback(nodeUuid, componentType);
+                try {
+                    await createComponentWithFallback(nodeUuid, componentType);
+                } catch (primaryErr: any) {
+                    // create-component 消息对部分组件(如 cc.Label)在已存在节点上会失败。
+                    // 回退:场景脚本 addComponentToNode 走 node.addComponent,在场景进程内修改场景图。
+                    // 场景进程 = 编辑器态,改动会被编辑器序列化保存(与 preview 运行时不同)。
+                    try {
+                        const fb: any = await Editor.Message.request('scene', 'execute-scene-script', {
+                            name: 'cocos-mcp-server',
+                            method: 'addComponentToNode',
+                            args: [nodeUuid, componentType]
+                        });
+                        if (!fb || fb.success === false) {
+                            throw new Error(`主路径: ${primaryErr.message}; 场景脚本回退: ${fb?.error || '失败'}`);
+                        }
+                    } catch (fbErr: any) {
+                        throw new Error(`create-component 失败(${primaryErr.message}),场景脚本回退也失败(${fbErr.message})`);
+                    }
+                }
                 // 重试验证:组件添加到 query-node 可见有延迟,最多 3 次 × 250ms
                 let verified = false;
                 let availableList = '';
@@ -253,9 +300,26 @@ export class ComponentTools implements ToolExecutor {
                         }
                     });
                 } else {
+                    // 验证失败:调场景脚本 addComponentToNode 拿真实原因(如组件冲突)
+                    // create-component 消息对某些失败静默成功,场景脚本会抛具体错误。
+                    let diagError = '';
+                    try {
+                        const diag: any = await Editor.Message.request('scene', 'execute-scene-script', {
+                            name: 'cocos-mcp-server',
+                            method: 'addComponentToNode',
+                            args: [nodeUuid, componentType]
+                        });
+                        if (diag && diag.success === false) {
+                            diagError = diag.error || '';
+                        }
+                    } catch (e: any) { diagError = e.message; }
                     resolve({
                         success: false,
-                        error: `Component '${componentType}' was not found on node after addition. Available components: ${availableList}`
+                        error: `Component '${componentType}' was not found on node after addition. Available components: ${availableList}` +
+                               (diagError ? `\n真实原因: ${diagError}` : ''),
+                        instruction: diagError && /conflict/i.test(diagError)
+                            ? `cc.Label/cc.RichText/cc.Sprite 等渲染组件互斥,不能共存于同一节点。先把已有渲染组件 remove_component 再加,或换一个节点。`
+                            : undefined
                     });
                 }
             } catch (err: any) {
@@ -447,7 +511,11 @@ export class ComponentTools implements ToolExecutor {
     }
 
     private async setComponentProperty(args: any): Promise<ToolResponse> {
-                        const { nodeUuid, componentType, property, propertyType, value } = args;
+                        // propertyType 缺省时从 value 自动推断(让调用方免声明类型,适配器也可纯透传)
+                        let { nodeUuid, componentType, property, propertyType, value } = args;
+                        if (!propertyType) {
+                            propertyType = inferPropertyTypeFromValue(value, property);
+                        }
         
         return new Promise(async (resolve) => {
             try {

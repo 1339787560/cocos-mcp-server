@@ -10,11 +10,41 @@ export class ToolManager {
     constructor() {
         this.settings = this.readToolManagerSettings();
         this.initializeAvailableTools();
-        
+
         // 如果没有配置，自动创建一个默认配置
         if (this.settings.configurations.length === 0) {
             console.log('[ToolManager] No configurations found, creating default configuration...');
             this.createConfiguration('默认配置', '自动创建的默认工具配置');
+        }
+
+        // 把代码中新增的工具(availableTools 有、但各配置 tools 里没有的)合并进每个配置。
+        // 解决:扩展升级新增工具后,saved 配置仍是旧集 → 新工具永不启用(getEnabledTools 只看配置)。
+        this.mergeNewToolsIntoConfigs();
+    }
+
+    /**
+     * 把 availableTools 中、但配置 tools 中缺失的工具补进每个配置(默认 enabled)。
+     * 这样扩展新增工具后无需用户手动到面板开启,立即可用。
+     */
+    private mergeNewToolsIntoConfigs(): void {
+        let addedTotal = 0;
+        for (const config of this.settings.configurations) {
+            const existingKeys = new Set(config.tools.map(t => `${t.category}/${t.name}`));
+            const toAdd = this.availableTools.filter(at => !existingKeys.has(`${at.category}/${at.name}`));
+            for (const at of toAdd) {
+                config.tools.push({
+                    category: at.category,
+                    name: at.name,
+                    enabled: true,
+                    description: at.description,
+                    versionRequirement: at.versionRequirement
+                });
+            }
+            addedTotal += toAdd.length;
+        }
+        if (addedTotal > 0) {
+            console.log(`[ToolManager] Merged ${addedTotal} new tool(s) into configurations`);
+            this.saveSettings();
         }
     }
 
