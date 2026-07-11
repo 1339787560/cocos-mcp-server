@@ -774,12 +774,17 @@ export class ComponentTools implements ToolExecutor {
                         assetType = 'cc.Prefab';
                     }
                     
+                    // dump 格式对齐 Cocos IPropertyDump: {type, value:{__uuid__,__expectedType__}}
+                    // (旧格式 {value:{uuid}, type} 会被 set-property 静默丢弃,资源不生效)
                     await setPropertyWithFallback(
                         nodeUuid,
                         propertyPath,
                         {
-                            value: processedValue,
-                            type: assetType
+                            type: assetType,
+                            value: {
+                                __uuid__: processedValue.uuid,
+                                __expectedType__: assetType
+                            }
                         }
                     );
                 } else if (componentType === 'cc.UITransform' && (property === '_contentSize' || property === 'contentSize')) {

@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "name": "withdraw_keyboard",
+  "canvas": {"width": 1048, "height": 936},
+  "assets": {
+    "bg": {"type": "image", "src": "goldbank/键盘/keboard_bg.png", "uuid": "e94cd89e-f5b7-48e3-a608-8b459250a93e@f9941"},
+    "edit_box": {"type": "image", "src": "goldbank/edit_box.png", "uuid": "41389a24-3ce8-4a75-af68-b61e212689c2@f9941"},
+    "clear": {"type": "image", "src": "goldbank/键盘/keyboard_btn_clear.png", "uuid": "34d2b05b-8af7-45cb-be95-76e91625a07c@f9941"},
+    "btn_0": {"type": "image", "src": "goldbank/键盘/keyboard_btn_0.png", "uuid": "1810ea08-130a-461b-99c2-bad4f3b62f22@f9941"},
+    "btn_1": {"type": "image", "src": "goldbank/键盘/keyboard_btn_1.png", "uuid": "f4da5b5a-0c6a-4c4c-81fa-da506d8d3ac7@f9941"},
+    "btn_2": {"type": "image", "src": "goldbank/键盘/keyboard_btn_2.png", "uuid": "be45ad13-cf7b-4c31-ab99-8689659066e2@f9941"},
+    "btn_3": {"type": "image", "src": "goldbank/键盘/keyboard_btn_3.png", "uuid": "f3ee3ab8-c0d3-41d0-be14-01f25ab40434@f9941"},
+    "btn_4": {"type": "image", "src": "goldbank/键盘/keyboard_btn_4.png", "uuid": "badbc803-53c4-470e-a918-0f0f6cd7aa16@f9941"},
+    "btn_5": {"type": "image", "src": "goldbank/键盘/keyboard_btn_5.png", "uuid": "e3dc29b9-29e8-4dd9-b2f7-85fa188ae52e@f9941"},
+    "btn_6": {"type": "image", "src": "goldbank/键盘/keyboard_btn_6.png", "uuid": "55d003dd-c23d-476a-acb1-fbab3822a094@f9941"},
+    "btn_7": {"type": "image", "src": "goldbank/键盘/keyboard_btn_7.png", "uuid": "a28a31a8-8a21-4874-9fb7-f72484315b81@f9941"},
+    "btn_8": {"type": "image", "src": "goldbank/键盘/keyboard_btn_8.png", "uuid": "b1ae9693-00f8-4c38-a8f0-e6fb8d269d35@f9941"},
+    "btn_9": {"type": "image", "src": "goldbank/键盘/keyboard_btn_9.png", "uuid": "0a163860-0346-4ba4-bd53-68e8c872ac70@f9941"},
+    "delete": {"type": "image", "src": "goldbank/键盘/keyboard_btn_delete.png", "uuid": "f16df114-67f5-404c-acf4-6ae95ee34ec2@f9941"},
+    "commit": {"type": "image", "src": "goldbank/键盘/keyboard_btn_commit.png", "uuid": "7a0f035a-204c-497c-9226-3cdf56f0ef96@f9941"}
+  },
+  "tree": {
+    "name": "WithdrawKeyboard",
+    "position": [0, 0],
+    "size": [1048, 936],
+    "children": [
+      {"name": "Background", "position": [0, 0], "size": [1048, 936], "image": "bg"},
+      {"name": "InputPanel", "position": [0, 377], "size": [888, 110], "image": "edit_box", "children": [
+        {"name": "PlaceholderText", "position": [-380, 0], "size": [200, 60], "text": {"string": "请输入取出金额", "fontSize": 40}},
+        {"name": "CloseButton", "position": [400, 0], "size": [80, 80], "image": "clear", "button": {}}
+      ]},
+      {"name": "KeyboardGrid", "position": [0, -57], "size": [919, 690], "layout": {"type": "grid", "cellSize": [285, 150], "spacing": [32, 30]}, "children": [
+        {"name": "Btn1", "position": [-317, 270], "size": [285, 150], "image": "btn_1", "button": {}},
+        {"name": "Btn2", "position": [0, 270], "size": [285, 150], "image": "btn_2", "button": {}},
+        {"name": "Btn3", "position": [317, 270], "size": [285, 150], "image": "btn_3", "button": {}},
+        {"name": "Btn4", "position": [-317, 90], "size": [285, 150], "image": "btn_4", "button": {}},
+        {"name": "Btn5", "position": [0, 90], "size": [285, 150], "image": "btn_5", "button": {}},
+        {"name": "Btn6", "position": [317, 90], "size": [285, 150], "image": "btn_6", "button": {}},
+        {"name": "Btn7", "position": [-317, -90], "size": [285, 150], "image": "btn_7", "button": {}},
+        {"name": "Btn8", "position": [0, -90], "size": [285, 150], "image": "btn_8", "button": {}},
+        {"name": "Btn9", "position": [317, -90], "size": [285, 150], "image": "btn_9", "button": {}},
+        {"name": "BtnDelete", "position": [-317, -270], "size": [285, 150], "image": "delete", "button": {}},
+        {"name": "Btn0", "position": [0, -270], "size": [285, 150], "image": "btn_0", "button": {}},
+        {"name": "BtnCommit", "position": [317, -270], "size": [285, 150], "image": "commit", "button": {}}
+      ]}
+    ]
+  }
+}
