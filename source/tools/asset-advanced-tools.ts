@@ -485,23 +485,216 @@ export class AssetAdvancedTools implements ToolExecutor {
     }
 
     private async getAssetDependencies(urlOrUUID: string, direction: string = 'dependencies'): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // Note: This would require scene analysis or additional APIs not available in current documentation
-            resolve({
-                success: false,
-                error: 'Asset dependency analysis requires additional APIs not available in current Cocos Creator MCP implementation. Consider using the Editor UI for dependency analysis.'
-            });
+        return new Promise(async (resolve) => {
+            try {
+                // 1. 解析 url/uuid → asset info (含磁盘路径)
+                const targetInfo = await this._resolveAssetInfo(urlOrUUID);
+                if (!targetInfo) {
+                    resolve({ success: false, error: `Asset not found: ${urlOrUUID}` });
+                    return;
+                }
+                const targetUuid: string = targetInfo.uuid;
+                const fs = require('fs');
+
+                if (direction === 'dependencies' || direction === 'forward' || direction === 'deps') {
+                    // 前向: 此资源引用了哪些其他资源(读源文件文本提取 __uuid__)
+                    const deps = await this._extractAssetDeps(targetInfo);
+                    resolve({
+                        success: true,
+                        data: {
+                            url: targetInfo.url, uuid: targetUuid,
+                            direction: 'dependencies',
+                            dependencies: deps.resolved,
+                            missing: deps.missing,
+                            count: deps.resolved.length,
+                            missingCount: deps.missing.length,
+                            note: deps.skippedBinary
+                                ? `二进制资源(.png/.fbx 等)无文本可解析, 仅文本资源(.scene/.prefab/.mat/.anim/.ts)的依赖被列出`
+                                : undefined
+                        }
+                    });
+                } else if (direction === 'referenced-by' || direction === 'reverse' || direction === 'refs') {
+                    // 反向: 谁引用了此资源(扫 db://assets 下文本文件)
+                    const refBy = await this._findReferencingAssets(targetUuid, 'db://assets');
+                    resolve({
+                        success: true,
+                        data: {
+                            url: targetInfo.url, uuid: targetUuid,
+                            direction: 'referenced-by',
+                            referencedBy: refBy,
+                            count: refBy.length
+                        }
+                    });
+                } else {
+                    resolve({ success: false, error: `direction 必须是 'dependencies' 或 'referenced-by', 收到: ${direction}` });
+                }
+            } catch (err: any) {
+                resolve({ success: false, error: err.message });
+            }
         });
     }
 
     private async getUnusedAssets(directory: string = 'db://assets', excludeDirectories: string[] = []): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            // Note: This would require comprehensive project analysis
-            resolve({
-                success: false,
-                error: 'Unused asset detection requires comprehensive project analysis not available in current Cocos Creator MCP implementation. Consider using the Editor UI or third-party tools for unused asset detection.'
-            });
+        return new Promise(async (resolve) => {
+            try {
+                const assets = await Editor.Message.request('asset-db', 'query-assets', { pattern: `${directory}/**/*` });
+                if (!assets || !Array.isArray(assets)) {
+                    resolve({ success: false, error: 'query-assets 返回空' });
+                    return;
+                }
+                const fs = require('fs');
+                // 二进制后缀: 无法文本解析, 但其引用由其他文本资源承载, 故仍可被标"used"
+                const binaryExts = new Set(['png','jpg','jpeg','webp','tga','pvr','astc','ktx','mp3','wav','ogg','ttf','otf','woff','woff2','bin','fbx','gltf','glb','usdz','exr','hdr','babylon','material']);
+                // 入口点后缀: 视为用户直接消费, 不报 unused (代码/配置/场景为运行入口)
+                const entryExts = new Set(['scene','ts','js','cjs','mjs','json','txt','md','csv','xml','yaml','yml','effect','chunk','glsl','vs','fs']);
+                const metaExts = new Set(['meta']);
+
+                // 第一遍: 收集所有非目录、非 meta、未被 exclude 排除的资源
+                const all = new Map<string, any>(); // uuid -> asset
+                for (const a of assets) {
+                    if (!a || a.isDirectory) continue;
+                    const url: string = a.url || '';
+                    if (metaExts.has((url.split('.').pop() || '').toLowerCase())) continue;
+                    if (excludeDirectories && excludeDirectories.some((ex: string) => url.startsWith(ex))) continue;
+                    all.set(a.uuid, a);
+                }
+
+                // 第二遍: 解析文本资源, 累积被引用的 uuid 集
+                const referenced = new Set<string>();
+                const uuidRe = /"__uuid__"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:@[0-9a-fA-F]+)?)"/g;
+                for (const a of all.values()) {
+                    const url: string = a.url || '';
+                    if (!url) continue;
+                    const path = this._urlToDisk(url);
+                    const ext = (path.split('.').pop() || '').toLowerCase();
+                    if (binaryExts.has(ext)) continue; // 二进制不解析
+                    try {
+                        const content = fs.readFileSync(path, 'utf-8');
+                        let m: RegExpExecArray | null;
+                        uuidRe.lastIndex = 0;
+                        while ((m = uuidRe.exec(content)) !== null) {
+                            referenced.add(m[1]);
+                            // 也记录去 suffix 的父 uuid (引用 spriteFrame 时父 texture 算被用)
+                            const base = m[1].split('@')[0];
+                            if (base !== m[1]) referenced.add(base);
+                        }
+                    } catch { /* 二进制/无权限, 跳过 */ }
+                }
+
+                // 第三遍: 差集 = 未被引用 且 非入口点
+                const unused: any[] = [];
+                for (const a of all.values()) {
+                    if (referenced.has(a.uuid)) continue;
+                    const ext = (a.url?.split('.').pop() || '').toLowerCase();
+                    if (ext && entryExts.has(ext)) continue;
+                    unused.push({ uuid: a.uuid, url: a.url, name: a.name, type: a.type || (a as any).assetType });
+                }
+                resolve({
+                    success: true,
+                    data: {
+                        directory,
+                        excludeDirectories: excludeDirectories || [],
+                        totalScanned: all.size,
+                        referencedUnique: referenced.size,
+                        unusedCount: unused.length,
+                        unusedAssets: unused,
+                        note: '仅基于文本资源(.scene/.prefab/.mat/.anim/.ts 等)的 __uuid__ 引用推断; 入口点(.ts/.scene/.json)不算 unused; 二进制资源(.png 等)靠被文本资源引用判定'
+                    }
+                });
+            } catch (err: any) {
+                resolve({ success: false, error: err.message });
+            }
         });
+    }
+
+    /** 解析 url 或 uuid 为 asset info (含磁盘 path) */
+    private async _resolveAssetInfo(urlOrUUID: string): Promise<any> {
+        try {
+            const info = await Editor.Message.request('asset-db', 'query-asset-info', urlOrUUID);
+            if (info && info.uuid) {
+                return {
+                    uuid: info.uuid,
+                    url: info.url,
+                    name: info.name,
+                    type: info.type || info.assetType,
+                    path: this._urlToDisk(info.url),
+                };
+            }
+            return null;
+        } catch { return null; }
+    }
+
+    /** db:// url 转磁盘绝对路径 (db://assets/foo -> <projectPath>/assets/foo) */
+    private _urlToDisk(url: string): string {
+        if (!url || !url.startsWith('db://')) return url || '';
+        const proj = Editor.Project.path;
+        return require('path').join(proj, url.replace(/^db:\/\/+/, ''));
+    }
+
+    /** 提取单个资源的前向依赖(读源文件文本正则 __uuid__) */
+    private async _extractAssetDeps(assetInfo: any): Promise<{ resolved: any[]; missing: any[]; skippedBinary: boolean }> {
+        const fs = require('fs');
+        const path: string = assetInfo.path;
+        const ext = (path?.split('.').pop() || '').toLowerCase();
+        const binaryExts = new Set(['png','jpg','jpeg','webp','tga','pvr','astc','ktx','mp3','wav','ogg','ttf','otf','woff','woff2','bin','fbx','gltf','glb','exr','hdr']);
+        if (!path || binaryExts.has(ext)) {
+            return { resolved: [], missing: [], skippedBinary: true };
+        }
+        let content: string;
+        try { content = fs.readFileSync(path, 'utf-8'); }
+        catch { return { resolved: [], missing: [], skippedBinary: true }; }
+
+        const uuidRe = /"__uuid__"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:@[0-9a-fA-F]+)?)"/g;
+        const seen = new Set<string>();
+        let m: RegExpExecArray | null;
+        while ((m = uuidRe.exec(content)) !== null) { seen.add(m[1]); }
+
+        const resolved: any[] = [];
+        const missing: any[] = [];
+        for (const uuid of seen) {
+            try {
+                const info = await Editor.Message.request('asset-db', 'query-asset-info', uuid);
+                if (info && info.uuid) {
+                    resolved.push({ uuid, url: info.url, name: info.name, type: info.type || info.assetType });
+                } else {
+                    missing.push({ uuid });
+                }
+            } catch {
+                missing.push({ uuid });
+            }
+        }
+        return { resolved, missing, skippedBinary: false };
+    }
+
+    /** 反向: 扫 directory 下文本文件, 找引用了 targetUuid 的资源 */
+    private async _findReferencingAssets(targetUuid: string, directory: string): Promise<any[]> {
+        const assets = await Editor.Message.request('asset-db', 'query-assets', { pattern: `${directory}/**/*` });
+        const fs = require('fs');
+        const binaryExts = new Set(['png','jpg','jpeg','webp','tga','pvr','astc','ktx','mp3','wav','ogg','ttf','otf','woff','woff2','bin','fbx','gltf','glb','exr','hdr']);
+        // cocos __uuid__ 引用可能是完整 uuid 或压缩 uuid; 同时匹配 targetUuid 及其可能的 @subAsset 父
+        const targets = new Set<string>([targetUuid]);
+        const base = targetUuid.split('@')[0];
+        if (base !== targetUuid) targets.add(base);
+
+        const result: any[] = [];
+        for (const a of assets || []) {
+            if (!a || a.isDirectory) continue;
+            const url: string = a.url || '';
+            if (!url) continue;
+            const path = this._urlToDisk(url);
+            const ext = (path.split('.').pop() || '').toLowerCase();
+            if (binaryExts.has(ext)) continue;
+            try {
+                const content = fs.readFileSync(path, 'utf-8');
+                // 命中任一 target 即记录
+                let hit = false;
+                for (const t of targets) { if (content.includes(t)) { hit = true; break; } }
+                if (hit) {
+                    result.push({ uuid: a.uuid, url: a.url, name: a.name, type: a.type || a.assetType });
+                }
+            } catch { /* skip */ }
+        }
+        return result;
     }
 
     private async compressTextures(directory: string = 'db://assets', format: string = 'auto', quality: number = 0.8): Promise<ToolResponse> {

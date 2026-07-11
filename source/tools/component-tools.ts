@@ -349,7 +349,14 @@ export class ComponentTools implements ToolExecutor {
                 const afterRemoveInfo = await this.getComponents(nodeUuid);
                 const stillExists = afterRemoveInfo.success && afterRemoveInfo.data?.components?.some((comp: any) => comp.type === componentType);
                 if (stillExists) {
-                    resolve({ success: false, error: `Component cid '${componentType}' was not removed from node '${nodeUuid}'.` });
+                    // 3.8.0-3.8.5 根因: 无官方 remove-component 消息(3.8.6+ 才有),
+                    // 场景脚本 node.removeComponent 走运行时不持久化到场景序列化,故 query-node 仍见。
+                    const cocosVer = (Editor as any)?.versions?.cocos || '3.8.x';
+                    resolve({
+                        success: false,
+                        error: `Component cid '${componentType}' 运行时已移除但未持久化到场景(Cocos ${cocosVer} 无 remove-component 编辑器消息, 需 3.8.6+)。`,
+                        instruction: `Workaround: (1) 升级 Cocos Creator 到 3.8.6+ 后此工具自动生效; (2) 当前版本: 改 .scene 文件, 删 node.__comps__ 内对应 component entry, 再 soft_reload_scene; (3) 编辑器 UI 里手动删除组件。`
+                    });
                 } else {
                     resolve({
                         success: true,

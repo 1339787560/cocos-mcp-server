@@ -379,6 +379,33 @@ export const methods: { [key: string]: (...any: any) => any } = {
     },
 
     /**
+     * 在场景进程上下文求值 JS(调试用)。可访问 require('cc')、scene、node 等。
+     * 表达式可为: 字符串表达式 / 多语句代码块 / async 函数体(自动 await Promise)。
+     * 安全提示: 无沙箱,等同 DevTools console, 仅调试用。
+     */
+    async eval(script: string) {
+        try {
+            if (!script || typeof script !== 'string') {
+                return { success: false, error: 'script 必须是非空字符串' };
+            }
+            // 用 new Function 包装, 自动 await Promise 返回值
+            const fn = new Function('return (async () => { return (' + script + '); })();');
+            const result = await fn();
+            // 结果归一化为可序列化(JSON); 无法序列化的转描述
+            let safe: any;
+            try {
+                JSON.stringify(result);
+                safe = result;
+            } catch {
+                safe = { __nonSerializable: true, description: String(result), type: typeof result };
+            }
+            return { success: true, data: { result: safe } };
+        } catch (error: any) {
+            return { success: false, error: error.message, stack: error.stack };
+        }
+    },
+
+    /**
      * 创建序列帧动画。
      * - 主路径:加载 SpriteFrame → AnimationClip.createWithSpriteFrames → EditorExtends.serialize
      * - 兜底路径(uuid-only):若 SpriteFrame 加载失败,直接按 uuid 手建 .anim JSON

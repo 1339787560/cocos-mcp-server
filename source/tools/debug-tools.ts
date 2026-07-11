@@ -254,16 +254,32 @@ export class DebugTools implements ToolExecutor {
 
     private async executeScript(script: string): Promise<ToolResponse> {
         return new Promise((resolve) => {
+            // name 必须是本扩展注册的 scene-script 名(cocos-mcp-server), method 必须在 scene-impl 导出 + package.json contributions.scene.methods 注册。
+            // 旧值 name:'console' 指向不存在的扩展 -> "Scenario scripts do not exist: console"。
             Editor.Message.request('scene', 'execute-scene-script', {
-                name: 'console',
+                name: 'cocos-mcp-server',
                 method: 'eval',
                 args: [script]
             }).then((result: any) => {
+                // scene-impl eval 返回 {success, data:{result}} 或 {success:false, error}
+                if (result && result.success === false) {
+                    resolve({ success: false, error: result.error || 'eval failed', stack: result.stack });
+                    return;
+                }
+                // result 为 undefined/null: scene method 'eval' 未注册(scene.ts FROZEN_METHODS 在编辑器启动时冻结,
+                // 新增 method 必须重启编辑器一次)。reload_extension 不会重注册 scene methods。
+                if (result === undefined || result === null) {
+                    resolve({
+                        success: false,
+                        error: `scene method 'eval' 未注册(execute-scene-script 返回空)。eval 是新增 scene method, scene.ts 在编辑器启动时冻结 method 表, 需重启 Cocos Creator 一次以注册。之后 eval impl 改动热生效。`
+                    });
+                    return;
+                }
                 resolve({
                     success: true,
                     data: {
-                        result: result,
-                        message: 'Script executed successfully'
+                        result: result?.data?.result ?? result,
+                        message: 'Script executed in scene context'
                     }
                 });
             }).catch((err: Error) => {
